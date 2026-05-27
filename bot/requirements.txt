@@ -1,0 +1,8 @@
+pyrogram==2.0.106
+TgCrypto
+yt-dlp
+psutil
+pymongo
+httpx
+mega.py
+beautifulsoup4
