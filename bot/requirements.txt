@@ -4,5 +4,5 @@ yt-dlp
 psutil
 pymongo
 httpx
-mega.py
 beautifulsoup4
+pycryptodome
