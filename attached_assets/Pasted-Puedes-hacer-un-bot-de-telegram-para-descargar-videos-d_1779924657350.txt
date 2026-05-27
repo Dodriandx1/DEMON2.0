@@ -1,0 +1,202 @@
+Puedes hacer un bot de telegram para descargar videos de redes sociales y todas los descargadores que cuando le envié un enlace  empiece a descargar el anime con una barra de descarga como está 
+‎
+‎
+‎╭ Task By → 「𝓗𝓪𝓻𝓾𝓽𝓸 」
+‎┊ [⬢⬢⬢⬢◉◌◌◌◌◌◌◌] 36.62%
+‎┊ Status   : Download
+‎┊ Done     : 130 / 355 partes
+‎┊ Total    : 355 partes
+‎┊ Speed    : 92.50 MB/s
+‎┊ ETA      : 8s
+‎┊ Past     : 4s
+‎┊ Engine   : CRDWV2
+‎╰ Mode     : #CRDW
+‎⋗ Stop : /cl_8857585
+‎
+‎✪ Bot By → @The_canst & @kaiser_yt
+‎
+‎Despues de descargar el video salga una barra donde diga que está codificando el video  la barra será Haci 
+‎
+‎╭ Task By → 「𝓗𝓪𝓻𝓾𝓽𝓸 」
+‎┊ [◉◌◌◌◌◌◌◌◌◌◌◌] 3.25%
+‎┊ Status   : Encoding
+‎┊ Done     : 0.05 KB
+‎┊ Total    : 0.05 KB
+‎┊ Speed    : 279.31 fps
+‎┊ ETA      : 1m 58s
+‎┊ Past     : 4s
+‎┊ Engine   : HandBrake
+‎╰ Mode     : #HB
+‎⋗ Stop : /cl_9178829
+‎
+‎✪ Bot By → @The_canst & @kaiser_yt
+‎
+‎despues de aver codificado el video salga una barra de subida que indique que el video se está subiendo tipo Haci
+‎
+‎
+‎╭ Task By → 「𝓗𝓪𝓻𝓾𝓽𝓸 」
+‎┊ [⬢⬢⬢◉◌◌◌◌◌◌◌◌] 25.47%
+‎┊ Status   : Upload
+‎┊ Done     : 36.50MB
+‎┊ Total    : 143.29MB
+‎┊ Speed    : 9.66MB/s
+‎┊ ETA      : 11s
+‎┊ Past     : 3s
+‎┊ Engine   : Pyrogram
+‎╰ Mode     : #TLGUP
+‎⋗ Stop : /cl_9178829
+‎
+‎✪ Bot By → @The_canst & @kaiser_yt
+‎
+‎Sierto en cada mensaje de barra de descarga en la de codificando el video y subiendo en video que sea un solo mensaje pero que se valla editando en tiempo real según el proceso indicado y después de que el video se suba borra la barra de subida 
+‎
+‎Tambien que después de las palabras 
+‎Task By →de cada barra de descarga codificando y subiendo salga el nombre de quien envío el enlace 
+‎
+‎Y que después de la palabra ⋗ Stop : salga el comando /cancel para cancelar la descarga 
+‎
+‎Tambien añade los comando
+‎/Stat para ver el panel de estadística del bot usa este ejemplo 
+‎
+‎╭─ Status Panel 
+‎┊ 🕐 Time on  : 
+‎┊ 🧠 RAM      : 
+‎┊ 💾 Storage  : 
+‎┊ 🖥️ Server   : 
+‎┊ ⚙️ Platform :
+‎┊ 🔧 CPU      : 
+‎╰─ Engine    : 
+‎
+‎✪ Bot By → @The_canst & @kaiser_yt
+‎
+‎Añade el comando /reset para reiniciar las estadísticas del bot que salga una barra tipo Haci 
+‎
+‎╭─「 Reset Completado ✅ 」
+‎┊ 🔄 Estado    : Online
+‎┊ 🕐 Uptime    : 0s
+‎┊ 🧹 Liberado  : Nada que limpiar
+‎┊ ⛔ Descargas : Canceladas
+‎╰─ Engine     : CRDWV2
+‎
+‎✪ Bot By → @The_canst & @kaiser_yt
+‎
+te dare un codigo de un bot quiero que lo implementes para que no tenga fallas 
+import os
+import sys
+import time
+import asyncio
+import subprocess
+import psutil
+import httpx
+import pymongo
+import gc 
+import yt_dlp
+import glob 
+import http.server
+import socketserver
+import threading
+import re 
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from pyrogram import Client, filters, enums
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, InputMediaVideo
+from pyrogram.errors import MessageNotModified
+
+# --- SERVIDOR KEEP-ALIVE PARA RENDER ---
+def keep_alive():
+    """Servidor web simple para que Render no apague el bot"""
+    class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is Running")
+
+    port = int(os.environ.get("PORT", 8000))
+    with socketserver.TCPServer(("", port), HealthCheckHandler) as httpd:
+        print(f"Servidor Keep-Alive activo en el puerto {port}")
+        httpd.serve_forever()
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# --- CONFIGURACIÓN ---
+os.environ['HOME'] = '/tmp'
+DOWNLOAD_DIR = "/tmp/downloads/"
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR, mode=0o777, exist_ok=True)
+
+
+active_tasks = {} 
+last_updates = {} 
+
+# --- NUEVO: COLA DE DESCARGAS GLOBAL ---
+download_queue = asyncio.Queue()
+
+bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# --- BASE DE DATOS ---
+db_connected = False
+try:
+    db_client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
+    users_col = db_client['bot_mediafire']['authorized_users']
+    db_client.server_info()
+    db_connected = True
+except: pass
+
+# --- UTILIDADES ---
+def is_authorized(user_id):
+    if user_id in ADMIN_IDS: return True
+    if db_connected:
+        try: return users_col.find_one({"user_id": user_id}) is not None
+        except: return False
+    return False
+
+def get_readable_size(size):
+    if size is None: return "0B"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024: return f"{size:.2f}{unit}"
+        size /= 1024
+    return "0B"
+
+def extract_thumbnail(video_path):
+    v_path = str(video_path)
+    thumb_path = v_path + ".jpg"
+    try:
+        subprocess.run(['ffmpeg', '-i', v_path, '-ss', '00:00:02', '-vframes', '1', thumb_path, '-y'], 
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        return thumb_path
+    except: return None
+
+async def safe_edit(msg, text, reply_markup=None):
+    "... 
+se puede optimizar el tiempo de encoding en telegram , que no demore mucho tiempo en dar el archivo en mp4 con caratula 
+y cambia uno de los creadores de lo que dice ✪ Bot By → @The_canst & @kaiser_yt , que sea Bot By → @The_canst & @Ryota_YT y a demas necesito que tambien saque el titulo del video
+
+ tiene que darme el video en telegram no un documento .mp4 tiene que verse con caratula  
+Esque obligatorio tiene que ser inicio de sesión en la cuenta , porque debe poder descargar videos de hasta 2 GB y a demás tenemos 62 GB de ram porque las descargas son lentos y las subidas de los videos son lentos
+A cierto el /cancel no detiene la descarga, por más que uno aplasta no funciona , soluciona cuando el usuario aplaste /cancel se detenga en total la descarga ╭ Task By → 「𝐑𝐲𝐨𝐭𝐚 𝐘𝐓」
+┊ [⬢⬢⬢⬢⬢⬢⬢⬢⬢⬢◉◌◌] 79.87%
+┊ Status : Upload
+┊ Done : 390.50 MB
+┊ Total : 488.93 MB
+┊ Speed : 1.89 MB/s
+┊ ETA : 52s
+┊ Past : 3m 26s
+┊ Engine : Pyrogram
+╰ Mode : #TLGUP
+⋗ Stop : /cancel_7815099965_1776566200
+
+✪ Bot By → @The_canst & @Ryota_YT
+ aver si puedes , quiero que tambien tenga la funcionabilidad de poner marca de aguas fijas a eleccion de la persona , tanto el texto , ubicacion , con o sin contorno , el tamaño de la letra de 25% a 100% , que tambien tenga una interfaz especial que diga el tiempo estimado en que recibira el video con la marca de agua , a demas esta nueva funcionabilidad solo funcionara cuando el usuario te mande el video hay le das las opciones que te dije anteriormente , claro manteniendo lo que antes funcionaba sin dañar el funcionamiento  
+puedes mejorar el tiempo que no demore mas de 5 minutos , las marcas de agua , a demas que sea tipo timer que a corde vaya procesando el video vaya disminuyendo el tiempo estimado  listo me lo das con marca de agua pero , yo te entrego videos son su propio contenido de texto su propia descripcion deberia devolvermelos con el mismo texto con el que te mando  ╭─「 💧 Marca de Agua 」
+┊ Black clover
+Película Sub Español [HD]
+┊ Texto : Anime YT
+┊ Posición : ↗ Arriba Der
+┊ Contorno : Con Contorno ✅
+┊ Tamaño : 25%
+┊
+┊ ⚙️ Finalizando...
+┊ ⏳ Tiempo restante: ~0s
+╰──────────────────────────
+
+✪ Bot By → @The_canst & @kaiser_yt se me murio subitamente  Ya tiktok puede descargar fotos de los carruceles y las otras app tambien quiero que tengan la capacidad de hacerlo puedes hacer eso sin dañar el funcionamiento  Otra implementación, hay animes que se suben en uTorrent quiero que pongas el comando de /encode para poder extraer el vídeo y lo mandé en mp4  Ahora , quiero que pueda ponerle subtitulos con el comando de -lat le ponga los subtitulos en español
