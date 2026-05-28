@@ -1802,12 +1802,16 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         if want_subs:
             # 1. Buscar Audio Latino
             audio_idx = await asyncio.to_thread(get_audio_index_by_lang, input_path)
-
-        if audio_idx is not None:
+            
+if audio_idx is not None:
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n┊ 🎧 Audio Español detectado\n"
-                f"┊ 🎬 {input_name[:40]}\n╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
+                f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
             audio_map = f"0:{audio_idx}"
+            # Se omite el copiado rápido para forzar la compresión más abajo
+        else:
+            if want_subs:
+                # ... (resto del código de extracción de subtítulos que ya arreglamos)
             cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0:v:0", "-map", audio_map,
                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                    "-movflags", "+faststart", encoded_path]
@@ -1836,18 +1840,17 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                         if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
                             sub_path = extracted_sub
 
-            if sub_path:
+           if sub_path:
                 await safe_edit(msg,
-                    f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES...\n"
+                    f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES y comprimiendo a 720p...\n"
                     f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
-                # Escapar y englobar en comillas simples
                 abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
                 sub_proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-i", input_path,
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-vf", f"subtitles='{abs_sub}':charenc=UTF-8",
-                    "-c:v", "libx264", "-crf", "21", "-preset", "medium",
-                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", encoded_path,
+                    "-vf", f"scale=-2:'min(720,ih)',subtitles='{abs_sub}':charenc=UTF-8",
+                    "-c:v", "libx264", "-crf", "26", "-preset", "fast",
+                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                 await sub_proc.wait()
                 if sub_proc.returncode == 0 and os.path.exists(encoded_path):
@@ -1859,28 +1862,18 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         if needs_standard_encode:
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n┊ 🎬 {input_name[:50]}\n"
-                f"┊ 📦 Tamaño : {size_gb:.2f} GB\n┊ ⚙️ Convirtiendo a MP4...\n"
-                f"╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
-            copy_proc = await asyncio.create_subprocess_exec(
+                f"┊ 📦 Tamaño original : {size_gb:.2f} GB\n┊ ⚙️ Comprimiendo a 720p MP4...\n"
+                f"╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
+            
+            enc_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-i", input_path, "-map", "0:v:0", "-map", audio_map,
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                "-movflags", "+faststart", encoded_path,
+                "-vf", "scale=-2:'min(720,ih)'",
+                "-c:v", "libx264", "-crf", "26", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await copy_proc.wait()
-            copy_ok = (copy_proc.returncode == 0 and os.path.exists(encoded_path)
-                       and os.path.getsize(encoded_path) > 1024 * 1024)
-            if not copy_ok:
-                await safe_edit(msg,
-                    f"╭ Task By → 「{uname}」\n┊ ⚙️ Re-encodando H264...\n"
-                    f"┊ 📁 {input_name[:50]}\n╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
-                enc_proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", input_path, "-map", "0:v:0", "-map", audio_map,
-                    "-c:v", "libx264", "-crf", "21", "-preset", "medium",
-                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await enc_proc.wait()
-                if enc_proc.returncode != 0 or not os.path.exists(encoded_path):
-                    raise Exception("ffmpeg no pudo convertir el video.")
+            await enc_proc.wait()
+            if enc_proc.returncode != 0 or not os.path.exists(encoded_path):
+                raise Exception("ffmpeg no pudo convertir y comprimir el video.")
 
         final_size = os.path.getsize(encoded_path) / 1024 ** 3
         await safe_edit(msg,
