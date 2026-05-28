@@ -229,16 +229,26 @@ def get_spanish_sub_index(input_path: str):
              "-of", "csv=p=0", input_path],
             capture_output=True, text=True, timeout=10
         )
+        first_idx = None
         for line in result.stdout.strip().splitlines():
             parts = line.split(",")
+            if not parts or not parts[0]: continue
+            
+            idx = parts[0]
+            # Guardamos el primer subtítulo encontrado como respaldo
+            if first_idx is None: 
+                first_idx = idx
+                
             if len(parts) >= 2:
-                idx  = parts[0]
                 lang = parts[1].lower()
-                if lang in ("spa", "es", "lat"):
+                if lang in ("spa", "es", "lat", "latino", "español"):
                     return idx
+                    
+        # Si no encontró etiqueta "es/spa", retorna el primero que haya encontrado
+        return first_idx 
     except Exception:
         pass
-    return None
+    return None 
     
 def get_audio_index_by_lang(input_path: str, langs: tuple = ("spa", "es", "lat", "latino", "español")) -> str:
     try:
