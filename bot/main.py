@@ -1041,7 +1041,12 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         "Referer": url,
                     }
                 elif not is_carousel_platform:
-                    base_opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+                    base_opts["format"] = (
+                        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+                        "/bestvideo[height<=1080]+bestaudio"
+                        "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                        "/best[ext=mp4]/best"
+                    )
                 if want_subs:
                     base_opts["writesubtitles"]    = True
                     base_opts["writeautomaticsub"] = True
@@ -1063,8 +1068,10 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                 last_error = None
                 if _is_youtube(url):
                     _COMBINED_CLIENTS = {"ios", "android", "mweb", "tv_embedded"}
-                    _FMT_COMBINED = "best[ext=mp4]/best"
-                    _FMT_SPLIT    = ("bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                    _FMT_COMBINED = "best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best"
+                    _FMT_SPLIT    = ("bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+                                     "/bestvideo[height<=1080]+bestaudio"
+                                     "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
                                      "/bestvideo+bestaudio/best[ext=mp4]/best")
                     _UA = {
                         "ios":     "com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0",
