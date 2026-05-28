@@ -56,6 +56,23 @@ download_queue: asyncio.Queue = asyncio.Queue()
 
 _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 
+# Calidad máxima de descarga (modificable con /quality)
+_max_quality = 1080
+
+def _build_fmt(h: int) -> tuple[str, str]:
+    """Devuelve (fmt_combined, fmt_split) para yt-dlp según la altura máxima."""
+    if h == 0:  # 0 = sin límite (best)
+        combined = "best[ext=mp4]/best"
+        split    = ("bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                    "/bestvideo+bestaudio/best[ext=mp4]/best")
+    else:
+        combined = (f"best[height<={h}][ext=mp4]/best[height<={h}]/best[ext=mp4]/best")
+        split    = (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+                    f"/bestvideo[height<={h}]+bestaudio"
+                    f"/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+                    f"/bestvideo+bestaudio/best[ext=mp4]/best")
+    return combined, split
+
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
 
 
@@ -1099,12 +1116,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         "Referer": url,
                     }
                 elif not is_carousel_platform:
-                    base_opts["format"] = (
-                        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
-                        "/bestvideo[height<=1080]+bestaudio"
-                        "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-                        "/best[ext=mp4]/best"
-                    )
+                    _, base_opts["format"] = _build_fmt(_max_quality)
                 if want_subs:
                     base_opts["writesubtitles"]    = True
                     base_opts["writeautomaticsub"] = True
@@ -1126,11 +1138,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                 last_error = None
                 if _is_youtube(url):
                     _COMBINED_CLIENTS = {"ios", "android", "mweb", "tv_embedded"}
-                    _FMT_COMBINED = "best[height<=1080][ext=mp4]/best[height<=1080]/best[ext=mp4]/best"
-                    _FMT_SPLIT    = ("bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
-                                     "/bestvideo[height<=1080]+bestaudio"
-                                     "/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-                                     "/bestvideo+bestaudio/best[ext=mp4]/best")
+                    _FMT_COMBINED, _FMT_SPLIT = _build_fmt(_max_quality)
                     _UA = {
                         "ios":     "com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0",
                         "android": "com.google.android.youtube/18.11.34 (Linux; U; Android 12; GB) gzip",
@@ -2045,6 +2053,7 @@ async def cmd_coms(client: Client, message: Message):
         "• /users — Ver usuarios autorizados\n"
         "• /stat — Ver estadísticas del servidor\n"
         "• /reset — Cancelar todo y limpiar\n"
+        "• /quality — Cambiar calidad de descarga (4K/1080p/720p/480p)\n"
         "• /admin — Dar rango admin\n"
         "• /remadmin — Quitar rango admin\n"
         "• /cancelarID — Quitar autorización (responde su mensaje)\n"
@@ -2117,6 +2126,46 @@ async def cmd_stat(client: Client, message: Message):
         f"┊ ⚡️ En proceso : {active}\n"
         f"╰─ Engine      : CRDWV2\n\n"
         f"{BOT_SIGNATURE}"
+    )
+
+@bot.on_message(filters.command(["quality", "calidad"]))
+async def cmd_quality(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    _labels = {2160: "4K (2160p)", 1080: "1080p ✅", 720: "720p", 480: "480p", 0: "Mejor disponible"}
+    cur = _max_quality
+    cur_label = _labels.get(cur, f"{cur}p")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔵 4K (2160p)",       callback_data="quality:2160"),
+         InlineKeyboardButton("🟢 1080p",            callback_data="quality:1080")],
+        [InlineKeyboardButton("🟡 720p",             callback_data="quality:720"),
+         InlineKeyboardButton("🟠 480p",             callback_data="quality:480")],
+        [InlineKeyboardButton("⚪ Mejor disponible", callback_data="quality:0")],
+    ])
+    await message.reply_text(
+        f"╭─ Calidad de descarga\n"
+        f"┊ Actual : <b>{cur_label}</b>\n"
+        f"┊\n"
+        f"╰─ Elige la calidad máxima:\n\n{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML, reply_markup=kb
+    )
+
+@bot.on_callback_query(filters.regex(r"^quality:(\d+)$"))
+async def cb_quality(client: Client, cb: CallbackQuery):
+    global _max_quality
+    if not is_admin(cb.from_user.id):
+        await cb.answer("⛔ Solo admins.", show_alert=True); return
+    h = int(cb.matches[0].group(1))
+    _max_quality = h
+    _labels = {2160: "4K (2160p)", 1080: "1080p", 720: "720p", 480: "480p", 0: "Mejor disponible"}
+    label = _labels.get(h, f"{h}p")
+    await cb.answer(f"✅ Calidad máxima: {label}", show_alert=False)
+    await cb.message.edit_text(
+        f"╭─ Calidad de descarga\n"
+        f"┊ Nueva : <b>{label}</b>\n"
+        f"┊\n"
+        f"╰─ Cambio aplicado ✅\n\n{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML
     )
 
 @bot.on_message(filters.command(["ping", "Ping"]))
@@ -2634,6 +2683,7 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
                  "addid", "Addid", "rmid", "removebyid",
                  "getcode", "codigo", "code",
+                 "quality", "calidad",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
