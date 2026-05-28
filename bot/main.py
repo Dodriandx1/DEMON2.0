@@ -775,18 +775,20 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
             else:
                 # 2. Si no hay audio latino, buscar y quemar subtítulos
                 sub_idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
-                if sub_idx is not None:
-                    await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Audio ES no encontrado, extrayendo subs...\n╰ Mode     : #Encode\n\n{BOT_SIGNATURE}")
-                    extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.srt")
+            if sub_idx is not None:
+                    await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Audio ES no encontrado, extrayendo subs...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
+                    # Cambiado de .srt a .ass
+                    extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
                     ext_proc = await asyncio.create_subprocess_exec(
                         "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sub_idx}",
-                        "-c:s", "srt", extracted_sub,
+                        extracted_sub, # Quitamos el '-c:s srt' para preservar formatos .ass
                         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
                     )
                     await ext_proc.wait()
                     if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
-                        abs_sub = os.path.abspath(extracted_sub).replace('\\', '\\\\').replace(':', '\\:')
-                        vf_filter = f"subtitles={abs_sub}:charenc=UTF-8"
+                        # Reemplazamos barras y encerramos en comillas simples para seguridad del filtro
+                        abs_sub = os.path.abspath(extracted_sub).replace('\\', '/').replace(':', '\\:')
+                        vf_filter = f"subtitles='{abs_sub}':charenc=UTF-8"
                         audio_map = "0:a:0?" # Forzar el primer audio si vamos a quemar subs
                     else:
                         extracted_sub = None
