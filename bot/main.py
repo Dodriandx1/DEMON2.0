@@ -665,33 +665,22 @@ def probe_video(input_path: str) -> dict:
 async def encode_video(input_path: str, output_path: str, msg: Message,
                        uname: str, task_id: str, audio_map: str = "0:a?", vf: str = None) -> bool:
     info        = await asyncio.to_thread(probe_video, input_path)
-    codec       = info["codec"]
     total_dur   = info["duration"]
-    audio_codec = info["audio_codec"]
     input_size  = os.path.getsize(input_path)
-    is_h264     = codec == "h264"
-    is_aac_compat = audio_codec in ("aac", "mp3", "mp4a")
 
     base = ["ffmpeg", "-threads", "0", "-i", input_path, "-map", "0:v:0"]
     if audio_map:
         base.extend(["-map", audio_map])
 
-    if vf:
-        cmd = base + ["-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", "21",
-                      "-c:a", "aac", "-b:a", "128k",
-                      "-movflags", "+faststart", "-progress", "pipe:1",
-                      "-nostats", "-y", output_path]
-    elif is_h264 and is_aac_compat:
-        cmd = base + ["-c:v", "copy", "-c:a", "copy",
-                      "-movflags", "+faststart", "-y", output_path]
-    elif is_h264:
-        cmd = base + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                      "-movflags", "+faststart", "-y", output_path]
-    else:
-        cmd = base + ["-c:v", "libx264", "-preset", "medium", "-crf", "21",
-                      "-c:a", "aac", "-b:a", "128k",
-                      "-movflags", "+faststart", "-progress", "pipe:1",
-                      "-nostats", "-y", output_path]
+    # Escalar a 720p máximo (si es menor, mantiene su tamaño para no pixelar)
+    scale_filter = "scale=-2:'min(720,ih)'"
+    final_vf = f"{scale_filter},{vf}" if vf else scale_filter
+
+    # Forzar re-codificación con compresión (CRF 26 es excelente para reducir peso manteniendo calidad)
+    cmd = base + ["-vf", final_vf, "-c:v", "libx264", "-preset", "fast", "-crf", "26",
+                  "-c:a", "aac", "-b:a", "128k",
+                  "-movflags", "+faststart", "-progress", "pipe:1",
+                  "-nostats", "-y", output_path]
 
     proc    = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -733,9 +722,8 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     if proc.returncode != 0:
         stderr_out = (await proc.stderr.read()).decode(errors="ignore")[-300:]
         print(f"[encode_video] FFmpeg error (rc={proc.returncode}): {stderr_out}")
-    return proc.returncode == 0 and os.path.exists(output_path) 
+    return proc.returncode == 0 and os.path.exists(output_path)
                            
-
 # ─── ENCODE DE ARCHIVO RECIBIDO ───────────────────────────────────────────────
 async def procesar_encode(client: Client, message: Message, file_id: str,
                           uname: str, uid: int, want_subs: bool = False,
@@ -775,7 +763,7 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
             else:
                 # 2. Si no hay audio latino, buscar y quemar subtítulos
                 sub_idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
-            if sub_idx is not None:
+                if sub_idx is not None: # <-- Corregida la indentación aquí
                     await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Audio ES no encontrado, extrayendo subs...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
                     # Cambiado de .srt a .ass
                     extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
@@ -793,30 +781,20 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
                     else:
                         extracted_sub = None
 
-        success = False
-        # Si no hay subtítulos por quemar, intentamos un copiado rápido (Fast-Copy)
-        if not vf_filter:
-            cmd = ["ffmpeg", "-y", "-i", input_path,
-                   "-map", "0:v:0", "-map", audio_map,
-                   "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                   "-movflags", "+faststart", output_path]
-            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-            _, stderr_bytes = await proc.communicate()
-            if proc.returncode == 0 and os.path.exists(output_path):
-                success = True
-            else:
-                print(f"[encode] fast-copy falló: {stderr_bytes.decode(errors='ignore')[-400:]}")
-
-        # Si el fast-copy falló o tenemos que quemar subtítulos, hacemos un re-encode completo
-        if not success:
-            if os.path.exists(output_path):
-                try: os.remove(output_path)
-                except: pass
-            success = await encode_video(input_path, output_path, msg, uname, task_id, audio_map=audio_map, vf=vf_filter)
+        # --- AQUÍ INICIA EL PASO 3 ---
+        # Forzamos siempre la compresión a 720p borrando el bloque de Fast-Copy
+        if os.path.exists(output_path):
+            try: os.remove(output_path)
+            except: pass
+            
+        await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ ⚙️ Comprimiendo a 720p...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
+        
+        success = await encode_video(input_path, output_path, msg, uname, task_id, audio_map=audio_map, vf=vf_filter)
 
         if not success or not os.path.exists(output_path):
             raise Exception("Conversión fallida — revisa los logs del bot para ver el error de FFmpeg")
 
+        # --- FIN DEL PASO 3, CONTINÚA LA SUBIDA NORMAL ---
         await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(output_path), 0, 0, 0, task_id))
         await upload_smart_file(client, message, output_path, msg, uname, task_id, title=f"{original_name} [MP4]")
         
@@ -832,7 +810,6 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
             if p and os.path.exists(p):
                 try: os.remove(p)
                 except: pass
-
 
 # ─── NÚCLEO DE DESCARGA ───────────────────────────────────────────────────────
 async def procesar_descarga(client: Client, message: Message, url: str,
