@@ -1855,7 +1855,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                     "ffmpeg", "-y", "-i", input_path,
                     "-map", "0:v:0", "-map", "0:a:0?",
                     "-vf", f"subtitles={abs_sub}:charenc=UTF-8",
-                    "-c:v", "libx264", "-crf", "21", "-preset", "medium",,
+                    "-c:v", "libx264", "-crf", "21", "-preset", "medium",
                     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", encoded_path,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                 await sub_proc.wait()
