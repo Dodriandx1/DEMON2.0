@@ -1947,6 +1947,7 @@ async def cmd_coms(client: Client, message: Message):
         "• /admin — Dar rango admin\n"
         "• /remadmin — Quitar rango admin\n"
         "• /cancelarID — Quitar autorización (responde su mensaje)\n"
+        "• /getcode — Obtener código fuente en .txt\n"
         "• /coms — Ver esta lista\n\n"
         f"{BOT_SIGNATURE}"
     )
@@ -1966,6 +1967,19 @@ async def cmd_start(client: Client, message: Message):
         f"*(Si no estás autorizado, pídele al admin tu ID)*\n\n"
         f"{BOT_SIGNATURE}"
     )
+
+@bot.on_message(filters.command(["getcode", "codigo", "code"]))
+async def cmd_getcode(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+    try:
+        await message.reply_document(
+            document=code_path,
+            file_name="main.py.txt",
+            caption=f"📄 Código fuente del bot\n\n{BOT_SIGNATURE}"
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Error al enviar el código: {e}")
 
 @bot.on_message(filters.command(["stat", "Stat", "STAT"]))
 async def cmd_stat(client: Client, message: Message):
@@ -2503,6 +2517,7 @@ async def process_watermark(client: Client, cb: CallbackQuery,
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
                  "addid", "Addid", "rmid", "removebyid",
+                 "getcode", "codigo", "code",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
