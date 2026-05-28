@@ -60,17 +60,28 @@ _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 _max_quality = 1080
 
 def _build_fmt(h: int) -> tuple[str, str]:
-    """Devuelve (fmt_combined, fmt_split) para yt-dlp según la altura máxima."""
-    if h == 0:  # 0 = sin límite (best)
-        combined = "best[ext=mp4]/best"
-        split    = ("bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-                    "/bestvideo+bestaudio/best[ext=mp4]/best")
+    """Devuelve (fmt_combined, fmt_split) para yt-dlp según la altura máxima.
+    NO restringe bestvideo a ext=mp4 — 1080p60 en YouTube es VP9/WebM.
+    merge_output_format=mp4 garantiza el archivo final en MP4."""
+    if h == 0:  # sin límite
+        combined = "bestvideo+bestaudio/best"
+        split    = "bestvideo+bestaudio/best"
+    elif h == 1080:
+        # Preferir 1080p60, luego 1080p, luego mejor disponible
+        combined = "bestvideo+bestaudio/best"
+        split    = ("bestvideo[height=1080][fps>=50]+bestaudio[ext=m4a]"
+                    "/bestvideo[height=1080][fps>=50]+bestaudio"
+                    "/bestvideo[height=1080]+bestaudio[ext=m4a]"
+                    "/bestvideo[height=1080]+bestaudio"
+                    "/bestvideo[height<=1080]+bestaudio"
+                    "/bestvideo+bestaudio/best")
     else:
-        combined = (f"best[height<={h}][ext=mp4]/best[height<={h}]/best[ext=mp4]/best")
-        split    = (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+        combined = f"bestvideo[height<={h}]+bestaudio/best"
+        split    = (f"bestvideo[height<={h}][fps>=50]+bestaudio[ext=m4a]"
+                    f"/bestvideo[height<={h}][fps>=50]+bestaudio"
+                    f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
                     f"/bestvideo[height<={h}]+bestaudio"
-                    f"/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
-                    f"/bestvideo+bestaudio/best[ext=mp4]/best")
+                    f"/bestvideo+bestaudio/best")
     return combined, split
 
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
@@ -1101,6 +1112,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     "concurrent_fragment_downloads": 10,
                     "http_chunk_size": 10 * 1024 * 1024,
                     "retries": 3, "fragment_retries": 3,
+                    "merge_output_format": "mp4",
                 }
                 if SOCIAL_USERNAME and SOCIAL_PASSWORD and not _is_youtube(url):
                     base_opts["username"] = SOCIAL_USERNAME
