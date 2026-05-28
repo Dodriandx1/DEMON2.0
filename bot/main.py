@@ -612,23 +612,25 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     is_h264     = codec == "h264"
     is_aac_compat = audio_codec in ("aac", "mp3", "mp4a")
 
+    # Siempre usar -map 0:v:0 y -map 0:a? para evitar streams de subtítulos
+    # y codecs incompatibles con el contenedor MP4
+    base = ["ffmpeg", "-threads", "0", "-i", input_path,
+            "-map", "0:v:0", "-map", "0:a?"]
+
     if is_h264 and is_aac_compat:
-        cmd = ["ffmpeg", "-threads", "0", "-i", input_path,
-               "-c:v", "copy", "-c:a", "copy",
-               "-movflags", "+faststart", "-y", output_path]
+        cmd = base + ["-c:v", "copy", "-c:a", "copy",
+                      "-movflags", "+faststart", "-y", output_path]
     elif is_h264:
-        cmd = ["ffmpeg", "-threads", "0", "-i", input_path,
-               "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-               "-movflags", "+faststart", "-y", output_path]
+        cmd = base + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                      "-movflags", "+faststart", "-y", output_path]
     else:
-        cmd = ["ffmpeg", "-threads", "0", "-i", input_path,
-               "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-               "-c:a", "aac", "-b:a", "128k",
-               "-movflags", "+faststart", "-progress", "pipe:1",
-               "-nostats", "-y", output_path]
+        cmd = base + ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                      "-c:a", "aac", "-b:a", "128k",
+                      "-movflags", "+faststart", "-progress", "pipe:1",
+                      "-nostats", "-y", output_path]
 
     proc    = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     start_t = time.time()
     fps_val = 0.0
@@ -664,6 +666,9 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
         raise
 
     await proc.wait()
+    if proc.returncode != 0:
+        stderr_out = (await proc.stderr.read()).decode(errors="ignore")[-300:]
+        print(f"[encode_video] FFmpeg error (rc={proc.returncode}): {stderr_out}")
     return proc.returncode == 0 and os.path.exists(output_path)
 
 
@@ -693,20 +698,28 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
         )
         success = False
         if not want_subs:
-            cmd = ["ffmpeg", "-y", "-i", input_path, "-c:v", "copy", "-c:a", "copy",
+            # Fast-copy: mapear solo video+audio para evitar streams incompatibles con MP4
+            cmd = ["ffmpeg", "-y", "-i", input_path,
+                   "-map", "0:v:0", "-map", "0:a?",
+                   "-c:v", "copy", "-c:a", "copy",
                    "-movflags", "+faststart", output_path]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL
+                stderr=asyncio.subprocess.PIPE
             )
-            await proc.wait()
+            _, stderr_bytes = await proc.communicate()
             if proc.returncode == 0 and os.path.exists(output_path):
                 success = True
+            else:
+                print(f"[encode] fast-copy falló (rc={proc.returncode}): {stderr_bytes.decode(errors='ignore')[-400:]}")
         if not success or want_subs:
+            if os.path.exists(output_path):
+                try: os.remove(output_path)
+                except: pass
             success = await encode_video(input_path, output_path, msg, uname, task_id)
         if not success or not os.path.exists(output_path):
-            raise Exception("Conversión fallida")
+            raise Exception("Conversión fallida — revisa los logs del bot para ver el error de FFmpeg")
         await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(output_path), 0, 0, 0, task_id))
         await upload_smart_file(client, message, output_path, msg, uname, task_id,
                                 title=f"{original_name} [MP4]")
