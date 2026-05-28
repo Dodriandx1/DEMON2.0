@@ -60,14 +60,10 @@ _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 _max_quality = 720
 
 def _build_fmt(h: int) -> tuple[str, str]:
-    """Devuelve (fmt_combined, fmt_split) para yt-dlp según la altura máxima.
-    NO restringe bestvideo a ext=mp4 — 1080p60 en YouTube es VP9/WebM.
-    merge_output_format=mp4 garantiza el archivo final en MP4."""
     if h == 0:  # sin límite
         combined = "bestvideo+bestaudio/best"
         split    = "bestvideo+bestaudio/best"
     elif h == 1080:
-        # Preferir 1080p60, luego 1080p, luego mejor disponible
         combined = "bestvideo+bestaudio/best"
         split    = ("bestvideo[height=1080][fps>=50]+bestaudio[ext=m4a]"
                     "/bestvideo[height=1080][fps>=50]+bestaudio"
@@ -85,7 +81,6 @@ def _build_fmt(h: int) -> tuple[str, str]:
     return combined, split
 
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
-
 
 # ─── SISTEMA DE AUTORIZACIÓN ─────────────────────────────────────────────────
 authorized_users = {}
@@ -115,7 +110,6 @@ def is_admin(uid: int) -> bool:
     user_data = authorized_users.get(str(uid))
     return bool(user_data and user_data.get("role") == "admin")
 
-
 # ─── KEEP-ALIVE ───────────────────────────────────────────────────────────────
 def keep_alive():
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -132,7 +126,6 @@ def keep_alive():
         httpd.serve_forever()
 
 threading.Thread(target=keep_alive, daemon=True).start()
-
 
 # ─── UTILIDADES ───────────────────────────────────────────────────────────────
 def get_readable_size(size) -> str:
@@ -221,85 +214,80 @@ def get_video_meta(video_path: str) -> dict:
     except Exception:
         return {"width": 0, "height": 0, "duration": 0}
 
-def get_spanish_sub_index(input_path: str):
+# ─── MENÚ INTERACTIVO DE PISTAS ──────────────────────────────────────────
+_encode_menus = {}
+
+def get_media_tracks(input_path: str) -> dict:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "s",
-             "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
+            ["ffprobe", "-v", "error", "-show_entries", "stream=index,codec_type:stream_tags=language,title",
              "-of", "json", input_path],
             capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
-        first_idx = None
-        
-        if data.get("streams"):
-            first_idx = str(data["streams"][0].get("index"))
-
-        # Prioridad 1: Latino Forzado (Ideal para animes doblados)
+        audios, subs = [], []
         for stream in data.get("streams", []):
+            ctype = stream.get("codec_type")
             idx = str(stream.get("index"))
             tags = stream.get("tags", {})
-            title = tags.get("title", "").lower()
-            if ("lat" in title or "latinoamérica" in title) and "forced" in title:
-                return idx
-
-        # Prioridad 2: Latino General
-        for stream in data.get("streams", []):
-            idx = str(stream.get("index"))
-            tags = stream.get("tags", {})
-            title = tags.get("title", "").lower()
-            if "lat" in title or "latino" in title or "latinoamérica" in title:
-                return idx
-
-        # Prioridad 3: Español España / General
-        for stream in data.get("streams", []):
-            idx = str(stream.get("index"))
-            tags = stream.get("tags", {})
-            lang = tags.get("language", "").lower()
-            title = tags.get("title", "").lower()
-            # "es" solo se usa para el código exacto del idioma, no como parte del título
-            if lang in ("spa", "es") or "español" in title or "spanish" in title:
-                return idx
-                
-        return first_idx 
-    except Exception as e:
-        print(f"[Sub Index] Error: {e}")
-        pass
-    return None
-
-def get_audio_index_by_lang(input_path: str) -> str:
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a",
-             "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
-             "-of", "json", input_path],
-            capture_output=True, text=True, timeout=10
-        )
-        data = json.loads(result.stdout)
-        
-        # 1. Buscar explícitamente Latino en el título
-        for stream in data.get("streams", []):
-            idx = str(stream.get("index"))
-            tags = stream.get("tags", {})
-            title = tags.get("title", "").lower()
-            if "lat" in title or "latino" in title or "latinoamérica" in title:
-                return idx
-
-        # 2. Buscar Español general (evitando falsos positivos con Japonés/Inglés)
-        for stream in data.get("streams", []):
-            idx = str(stream.get("index"))
-            tags = stream.get("tags", {})
-            lang = tags.get("language", "").lower()
-            title = tags.get("title", "").lower()
+            lang = tags.get("language", "und").upper()
+            title = tags.get("title", "Desconocido")
+            label = f"[{lang}] {title}"[:40]
             
-            # Validamos código exacto ("spa", "es") o la palabra completa "español"
-            if lang in ("spa", "es") or "español" in title or "spanish" in title or "spa" in title:
-                return idx
-                
+            if ctype == "audio":
+                audios.append({"idx": idx, "label": label})
+            elif ctype == "subtitle":
+                subs.append({"idx": idx, "label": label})
+        return {"audios": audios, "subs": subs}
     except Exception as e:
-        print(f"[Audio Index] Error: {e}")
-        pass
-    return None 
+        print(f"[Tracks Error]: {e}")
+        return {"audios": [], "subs": []}
+
+def get_encode_keyboard(task_id):
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    sess = _encode_menus.get(task_id)
+    if not sess: return None
+    
+    rows = []
+    if sess["audios"]:
+        rows.append([InlineKeyboardButton("🔊 SELECCIONA AUDIO:", callback_data="ignore")])
+        a_row = []
+        for a in sess["audios"]:
+            prefix = "✅ " if sess["sel_a"] == a["idx"] else "⬜ "
+            a_row.append(InlineKeyboardButton(f"{prefix}{a['idx']}", callback_data=f"enc_a:{task_id}:{a['idx']}"))
+            if len(a_row) == 4:
+                rows.append(a_row); a_row = []
+        if a_row: rows.append(a_row)
+    
+    if sess["subs"]:
+        rows.append([InlineKeyboardButton("🔤 SELECCIONA SUBTÍTULO:", callback_data="ignore")])
+        s_row = []
+        prefix = "✅ " if sess["sel_s"] is None else "⬜ "
+        s_row.append(InlineKeyboardButton(f"{prefix}Ninguno", callback_data=f"enc_s:{task_id}:none"))
+        
+        for s in sess["subs"]:
+            prefix = "✅ " if sess["sel_s"] == s["idx"] else "⬜ "
+            s_row.append(InlineKeyboardButton(f"{prefix}{s['idx']}", callback_data=f"enc_s:{task_id}:{s['idx']}"))
+            if len(s_row) == 4:
+                rows.append(s_row); s_row = []
+        if s_row: rows.append(s_row)
+        
+    rows.append([InlineKeyboardButton("▶️ COMENZAR CONVERSIÓN", callback_data=f"enc_start:{task_id}")])
+    return InlineKeyboardMarkup(rows)
+
+def get_encode_text(task_id, file_name):
+    sess = _encode_menus[task_id]
+    txt = f"⚙️ **Analizador de Archivos**\n🎬 `{file_name}`\n\n"
+    if sess["audios"]:
+        txt += "**🔊 Pistas de Audio Disponibles:**\n"
+        for a in sess["audios"]:
+            txt += f"• **[{a['idx']}]** {a['label']}\n"
+    if sess["subs"]:
+        txt += "\n**🔤 Pistas de Subtítulos Disponibles:**\n"
+        for s in sess["subs"]:
+            txt += f"• **[{s['idx']}]** {s['label']}\n"
+    txt += f"\n👇 Selecciona el número de pista en los botones:\n\n{BOT_SIGNATURE}"
+    return txt
 
 # ─── MOTOR MEGA NATIVO ────────────────────────────────────────────────────────
 _MEGA_API   = "https://g.api.mega.co.nz/cs"
@@ -461,7 +449,6 @@ async def mega_download(url: str, dest_dir: str, task_id: str, progress_cb=None)
     title = filename.rsplit('.', 1)[0] if '.' in filename else filename
     return dest_path, title
 
-
 # ─── PANELES DE PROGRESO ──────────────────────────────────────────────────────
 async def safe_edit(msg: Message, text: str, reply_markup=None):
     try:
@@ -556,7 +543,6 @@ async def upload_progress(current: int, total: int, msg: Message, start_t: float
     panel   = upload_panel(uname, pct, current, total, speed, elapsed, eta, task_id)
     await safe_edit(msg, panel)
 
-
 async def _ensure_jpeg(path: str) -> str:
     lower = path.lower()
     if not lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".avif")):
@@ -573,7 +559,6 @@ async def _ensure_jpeg(path: str) -> str:
     except Exception:
         pass
     return path
-
 
 # ─── SUBIDA INTELIGENTE ───────────────────────────────────────────────────────
 async def upload_smart_file(client: Client, message: Message, path: str,
@@ -669,7 +654,6 @@ async def upload_smart_file(client: Client, message: Message, path: str,
             progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
         )
 
-
 # ─── RECODIFICADOR ────────────────────────────────────────────────────────────
 def probe_video(input_path: str) -> dict:
     try:
@@ -704,11 +688,10 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     if audio_map:
         base.extend(["-map", audio_map])
 
-    # Escalar a 720p máximo (si es menor, mantiene su tamaño para no pixelar)
+    # Escalar a 720p máximo
     scale_filter = "scale=-2:'min(720,ih)'"
     final_vf = f"{scale_filter},{vf}" if vf else scale_filter
 
-    # Forzar re-codificación con compresión (CRF 26 es excelente para reducir peso manteniendo calidad)
     cmd = base + ["-vf", final_vf, "-c:v", "libx264", "-preset", "fast", "-crf", "26",
                   "-c:a", "aac", "-b:a", "128k",
                   "-movflags", "+faststart", "-progress", "pipe:1",
@@ -755,7 +738,7 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
         stderr_out = (await proc.stderr.read()).decode(errors="ignore")[-300:]
         print(f"[encode_video] FFmpeg error (rc={proc.returncode}): {stderr_out}")
     return proc.returncode == 0 and os.path.exists(output_path)
-                           
+
 # ─── ENCODE DE ARCHIVO RECIBIDO ───────────────────────────────────────────────
 async def procesar_encode(client: Client, message: Message, file_id: str,
                           uname: str, uid: int, want_subs: bool = False,
@@ -777,44 +760,52 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
         await client.download_media(file_id, file_name=input_path)
         await safe_edit(msg,
             f"╭ Task By → 「{uname}」\n"
-            f"┊ [{make_bar(0)}] 0.00%\n"
-            f"┊ Status   : Analizando pistas de audio...\n"
-            f"┊ Archivo  : {original_name[:40]}\n"
-            f"╰ Mode     : #Encode\n\n{BOT_SIGNATURE}"
+            f"┊ 🔍 Analizando pistas del archivo...\n"
+            f"╰ Mode      : #Encode\n\n{BOT_SIGNATURE}"
         )
 
+        tracks = await asyncio.to_thread(get_media_tracks, input_path)
         audio_map = "0:a?"
         vf_filter = None
 
-        if want_subs:
-            # 1. Buscar Audio Latino
-            audio_idx = await asyncio.to_thread(get_audio_index_by_lang, input_path)
-            if audio_idx is not None:
-                audio_map = f"0:{audio_idx}"
-                await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🎧 Audio Español/Latino detectado\n╰ Mode     : #Encode\n\n{BOT_SIGNATURE}")
-            else:
-                # 2. Si no hay audio latino, buscar y quemar subtítulos
-                sub_idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
-                if sub_idx is not None: # <-- Corregida la indentación aquí
-                    await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Audio ES no encontrado, extrayendo subs...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
-                    # Cambiado de .srt a .ass
-                    extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
-                    ext_proc = await asyncio.create_subprocess_exec(
-                        "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sub_idx}",
-                        extracted_sub, # Quitamos el '-c:s srt' para preservar formatos .ass
-                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-                    )
-                    await ext_proc.wait()
-                    if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
-                        # Reemplazamos barras y encerramos en comillas simples para seguridad del filtro
-                        abs_sub = os.path.abspath(extracted_sub).replace('\\', '/').replace(':', '\\:')
-                        vf_filter = f"subtitles='{abs_sub}':charenc=UTF-8"
-                        audio_map = "0:a:0?" # Forzar el primer audio si vamos a quemar subs
-                    else:
-                        extracted_sub = None
+        if tracks["audios"] or tracks["subs"]:
+            menu_event = asyncio.Event()
+            _encode_menus[task_id] = {
+                "audios": tracks["audios"], "subs": tracks["subs"],
+                "sel_a": tracks["audios"][0]["idx"] if tracks["audios"] else None,
+                "sel_s": None,
+                "event": menu_event
+            }
+            menu_msg = await message.reply_text(
+                get_encode_text(task_id, original_name[:40]),
+                reply_markup=get_encode_keyboard(task_id)
+            )
+            
+            while not menu_event.is_set():
+                if active_tasks.get(task_id) == "CANCELLED":
+                    raise asyncio.CancelledError("USER_CANCELLED")
+                await asyncio.sleep(1)
+            
+            sel_a = _encode_menus[task_id]["sel_a"]
+            sel_s = _encode_menus[task_id]["sel_s"]
+            _encode_menus.pop(task_id, None)
+            
+            if sel_a:
+                audio_map = f"0:{sel_a}"
+            
+            if sel_s:
+                await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Extrayendo subtítulo [{sel_s}]...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
+                extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
+                ext_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sel_s}",
+                    extracted_sub,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+                )
+                await ext_proc.wait()
+                if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
+                    abs_sub = os.path.abspath(extracted_sub).replace('\\', '/').replace(':', '\\:')
+                    vf_filter = f"subtitles='{abs_sub}':charenc=UTF-8"
 
-        # --- AQUÍ INICIA EL PASO 3 ---
-        # Forzamos siempre la compresión a 720p borrando el bloque de Fast-Copy
         if os.path.exists(output_path):
             try: os.remove(output_path)
             except: pass
@@ -826,11 +817,9 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
         if not success or not os.path.exists(output_path):
             raise Exception("Conversión fallida — revisa los logs del bot para ver el error de FFmpeg")
 
-        # --- FIN DEL PASO 3, CONTINÚA LA SUBIDA NORMAL ---
         await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(output_path), 0, 0, 0, task_id))
         await upload_smart_file(client, message, output_path, msg, uname, task_id, title=f"{original_name} [MP4]")
         
-        # Eliminar el panel de carga final
         try: await msg.delete()
         except Exception: pass
 
@@ -1020,8 +1009,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                     f.write(chunk)
                                     curr += len(chunk)
                                     await download_progress(curr, total, msg, start_t, uname, task_id, engine, mode)
-                else:
-                    raise Exception("La API de TikTok no devolvió contenido multimedia.")
             else:
                 raise Exception("Fallo en la extracción del enlace de TikTok.")
 
@@ -1425,7 +1412,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     abs_sub = os.path.abspath(burn_sub)
                     sub_proc = await asyncio.create_subprocess_exec(
                         "ffmpeg", "-y", "-i", path,
-                        "-vf", f"subtitles={abs_sub}:charenc=UTF-8",
+                        "-vf", f"subtitles='{abs_sub}':charenc=UTF-8",
                         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
                         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
                         encoded_path,
@@ -1760,7 +1747,6 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
             try: os.remove(f)
             except: pass
 
-
 # ─── TORRENT ──────────────────────────────────────────────────────────────────
 _TORRENT_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".ts", ".m2ts", ".wmv", ".flv", ".webm"}
 
@@ -1808,7 +1794,7 @@ def _torrent_selection_kb(files: list, uid: int, task_id: str):
 
 async def _torrent_encode_and_send(client: Client, message: Message, msg,
                                    uname: str, task_id: str, dl_dir: str,
-                                   select_indices=None, want_subs: bool = False):
+                                   select_indices=None):
     import shutil
     encoded_path = None; input_path = None
     try:
@@ -1827,39 +1813,49 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         
         encoded_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_out.mp4")
         sub_path = None
-        audio_idx = None
         audio_map = "0:a?"
         needs_standard_encode = True
 
-        if want_subs:
-            # 1. Buscar Audio Latino
-            audio_idx = await asyncio.to_thread(get_audio_index_by_lang, input_path)
-
-        if audio_idx is not None:
-            await safe_edit(msg,
-                f"╭ Task By → 「{uname}」\n┊ 🎧 Audio Español detectado\n"
-                f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
-            audio_map = f"0:{audio_idx}"
-            # Se omite el copiado rápido para forzar la compresión más abajo
-        else:
-            if want_subs:
-                # 2. Si no hay audio latino, buscar subtítulos
-                for root, _, files in os.walk(dl_dir):
-                    for f in files:
-                        if f.lower().endswith((".srt", ".vtt", ".ass", ".ssa")):
-                            sub_path = os.path.join(root, f); break
-                    if sub_path: break
-                if not sub_path:
-                    idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
-                    if idx is not None:
-                        extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
-                        ext_proc = await asyncio.create_subprocess_exec(
-                            "ffmpeg", "-y", "-i", input_path, "-map", f"0:{idx}",
-                            extracted_sub,
-                            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                        await ext_proc.wait()
-                        if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
-                            sub_path = extracted_sub
+        await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔍 Analizando pistas del torrent...\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
+        
+        tracks = await asyncio.to_thread(get_media_tracks, input_path)
+        
+        if tracks["audios"] or tracks["subs"]:
+            menu_event = asyncio.Event()
+            _encode_menus[task_id] = {
+                "audios": tracks["audios"], "subs": tracks["subs"],
+                "sel_a": tracks["audios"][0]["idx"] if tracks["audios"] else None,
+                "sel_s": None,
+                "event": menu_event
+            }
+            menu_msg = await message.reply_text(
+                get_encode_text(task_id, input_name[:40]),
+                reply_markup=get_encode_keyboard(task_id)
+            )
+            
+            while not menu_event.is_set():
+                if active_tasks.get(task_id) == "CANCELLED":
+                    raise asyncio.CancelledError("USER_CANCELLED")
+                await asyncio.sleep(1)
+            
+            sel_a = _encode_menus[task_id]["sel_a"]
+            sel_s = _encode_menus[task_id]["sel_s"]
+            _encode_menus.pop(task_id, None)
+            
+            if sel_a:
+                audio_map = f"0:{sel_a}"
+            
+            if sel_s:
+                await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Extrayendo subtítulo [{sel_s}]...\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
+                extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
+                ext_proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sel_s}",
+                    extracted_sub,
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+                )
+                await ext_proc.wait()
+                if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
+                    sub_path = extracted_sub
 
         if sub_path:
             await safe_edit(msg,
@@ -1868,7 +1864,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
             abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
             sub_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-i", input_path,
-                "-map", "0:v:0", "-map", "0:a:0?",
+                "-map", "0:v:0", "-map", audio_map,
                 "-vf", f"scale=-2:'min(720,ih)',subtitles='{abs_sub}':charenc=UTF-8",
                 "-c:v", "libx264", "-crf", "26", "-preset", "fast",
                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
@@ -1961,7 +1957,7 @@ async def _run_torrent_download(client, message, msg, uname, task_id, source, dl
         raise Exception("aria2c terminó con error.")
 
 async def procesar_torrent(client: Client, message: Message, source: str,
-                            uname: str, task_id: str, is_magnet: bool = True, want_subs: bool = False):
+                            uname: str, task_id: str, is_magnet: bool = True):
     import shutil
     uid      = message.from_user.id
     dl_dir   = os.path.join(DOWNLOAD_DIR, task_id)
@@ -1997,7 +1993,7 @@ async def procesar_torrent(client: Client, message: Message, source: str,
                 "torrent_path": torrent_path, "dl_dir": dl_dir,
                 "meta_dir": meta_dir, "task_id": task_id, "uname": uname,
                 "chat_id": message.chat.id, "files": file_list,
-                "msg_id": msg.id, "want_subs": want_subs,
+                "msg_id": msg.id,
             }
             kb = _torrent_selection_kb(file_list, uid, task_id)
             listed = "\n".join(f"  {i+1}. 📺 {fname} ({size})"
@@ -2011,7 +2007,7 @@ async def procesar_torrent(client: Client, message: Message, source: str,
                 reply_markup=kb)
             return
         await _run_torrent_download(client, message, msg, uname, task_id, source, dl_dir)
-        await _torrent_encode_and_send(client, message, msg, uname, task_id, dl_dir, want_subs=want_subs)
+        await _torrent_encode_and_send(client, message, msg, uname, task_id, dl_dir)
     except (Exception, asyncio.CancelledError) as e:
         is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
         if is_cancel: _stats["cancelados"] += 1
@@ -2023,7 +2019,6 @@ async def procesar_torrent(client: Client, message: Message, source: str,
         active_tasks.pop(task_id, None)
         _torrent_sessions.pop(str(uid), None)
         shutil.rmtree(meta_dir, ignore_errors=True)
-
 
 # ─── COLA DE TRABAJO ──────────────────────────────────────────────────────────
 async def queue_worker():
@@ -2040,11 +2035,9 @@ async def queue_worker():
         finally:
             download_queue.task_done()
 
-
 # ─── CLIENTE BOT ──────────────────────────────────────────────────────────────
 bot = Client("bot_session", api_id=API_ID, api_hash=API_HASH,
              bot_token=BOT_TOKEN, workdir="/tmp")
-
 
 # ─── COMANDOS ─────────────────────────────────────────────────────────────────
 @bot.on_message(filters.command("coms"))
@@ -2244,7 +2237,6 @@ async def cmd_encode(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
     uid       = message.from_user.id
     uname     = message.from_user.username or message.from_user.first_name or str(uid)
-    want_subs = bool(re.search(r"-lat", message.text or "", re.IGNORECASE))
 
     # Respondiendo a un archivo de video
     if message.reply_to_message:
@@ -2253,7 +2245,7 @@ async def cmd_encode(client: Client, message: Message):
         if reply.video or (reply.document and (reply.document.mime_type or "").startswith("video/")):
             file_id   = reply.video.file_id if reply.video else reply.document.file_id
             file_name = (reply.video.file_name if reply.video else reply.document.file_name) or "video"
-            asyncio.create_task(procesar_encode(client, message, file_id, uname, uid, want_subs, original_name=file_name))
+            asyncio.create_task(procesar_encode(client, message, file_id, uname, uid, original_name=file_name))
             return
         # Archivo .torrent
         if reply.document and (reply.document.file_name or "").lower().endswith(".torrent"):
@@ -2261,8 +2253,7 @@ async def cmd_encode(client: Client, message: Message):
             torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
             await message.reply_text("🧲 Procesando archivo .torrent...")
             await client.download_media(reply, file_name=torrent_path)
-            asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id,
-                                                  is_magnet=False, want_subs=want_subs))
+            asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
             return
 
     # Argumento: magnet link
@@ -2271,25 +2262,23 @@ async def cmd_encode(client: Client, message: Message):
         await message.reply_text(
             "╭ **Uso correcto de /encode**\n┊\n"
             "┊ **Convertir .mkv a MP4:**\n"
-            "┊ Responde al archivo con `/encode` o `/encode -lat`\n┊\n"
+            "┊ Responde al archivo con `/encode`\n┊\n"
             "┊ **Descargar Torrent:**\n"
             "┊ `/encode <magnet link>`\n"
-            "┊ `/encode magnet:?xt=urn:btih:... -lat`\n┊\n"
-            "┊ `-lat` = Quemar subtítulos español\n"
+            "┊ `/encode magnet:?xt=urn:btih:...`\n┊\n"
+            "┊ (El bot preguntará interactivamente por los subtítulos)\n"
             f"╰──────────────────\n\n{BOT_SIGNATURE}"
         )
         return
 
-    arg_text = re.sub(r"\s*-lat\s*", " ", parts[1], flags=re.IGNORECASE).strip()
+    arg_text = parts[1].strip()
     src_match = re.search(r'magnet:\?[^\s]+|https?://[^\s]+', arg_text)
     if not src_match:
         await message.reply_text(f"⚠️ El enlace debe ser un magnet link o URL de torrent.\n\n{BOT_SIGNATURE}")
         return
     source  = src_match.group(0)
     task_id = f"{uid}_{int(time.time())}"
-    asyncio.create_task(procesar_torrent(client, message, source, uname, task_id,
-                                          is_magnet=source.startswith("magnet:"), want_subs=want_subs))
-
+    asyncio.create_task(procesar_torrent(client, message, source, uname, task_id, is_magnet=source.startswith("magnet:")))
 
 # ─── CANCELACIONES ────────────────────────────────────────────────────────────
 @bot.on_message(filters.regex(r"^/cancel_([0-9]+_[0-9]+)"))
@@ -2321,7 +2310,6 @@ async def cmd_cancel_global(client: Client, message: Message):
         await message.reply_text("🛑 Todas tus descargas han sido canceladas.")
     else:
         await message.reply_text("⚠️ No tienes tareas activas en este momento.")
-
 
 # ─── ADMINISTRACIÓN ───────────────────────────────────────────────────────────
 @bot.on_message(filters.command("id") & filters.reply)
@@ -2445,7 +2433,6 @@ async def cmd_reset(client: Client, message: Message):
         f"{BOT_SIGNATURE}"
     )
 
-
 # ─── MARCA DE AGUA ────────────────────────────────────────────────────────────
 WM_POS_LABELS = {
     "topleft":  "↖ Arriba Izq",
@@ -2561,15 +2548,12 @@ async def handle_video_upload(client: Client, message: Message):
             uname        = message.from_user.username or message.from_user.first_name or str(uid)
             task_id      = f"{uid}_{int(time.time())}"
             torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
-            caption_text = message.caption or ""
-            want_subs    = bool(re.search(r"(?:^|\s)-lat(?:\s|$)", caption_text, re.IGNORECASE))
             await message.reply_text(
                 f"╭─「 🧲 Torrent detectado 」\n┊ 📄 {message.document.file_name}\n"
                 f"┊ ⏳ Descargando y procesando...\n"
                 f"╰─ Usa /cancel para detener\n\n{BOT_SIGNATURE}")
             await client.download_media(message, file_name=torrent_path)
-            asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id,
-                                                  is_magnet=False, want_subs=want_subs))
+            asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
             return
 
     if message.video:
@@ -2593,7 +2577,7 @@ async def handle_video_upload(client: Client, message: Message):
         "┊ Escribe el texto que quieres\n┊ usar como marca de agua:\n┊\n"
         f"╰─ /wm_cancel para cancelar\n\n{BOT_SIGNATURE}", quote=True)
 
-@bot.on_message(filters.command("wm_cancel"))
+@bot.on_command("wm_cancel")
 async def cmd_wm_cancel(client: Client, message: Message):
     _wm_sessions.pop(str(message.from_user.id), None)
     await message.reply_text(f"❌ Marca de agua cancelada.\n\n{BOT_SIGNATURE}")
@@ -2693,6 +2677,28 @@ async def process_watermark(client: Client, cb: CallbackQuery,
                 if os.path.exists(p): os.remove(p)
             except Exception: pass
 
+# ─── CALLBACK PARA MENÚ INTERACTIVO DE AUDIO Y SUBTÍTULOS ────────────────────
+@bot.on_callback_query(filters.regex(r"^enc_(a|s|start):"))
+async def cb_encode_menu(client: Client, cb: CallbackQuery):
+    data = cb.data.split(":")
+    action = data[0]
+    task_id = data[1]
+    
+    if task_id not in _encode_menus:
+        await cb.answer("Sesión expirada o cancelada.", show_alert=True)
+        return
+        
+    sess = _encode_menus[task_id]
+    
+    if action == "enc_a":
+        sess["sel_a"] = data[2]
+        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
+    elif action == "enc_s":
+        sess["sel_s"] = None if data[2] == "none" else data[2]
+        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
+    elif action == "enc_start":
+        await cb.message.edit_text("✅ Opciones guardadas. Procesando video...", reply_markup=None)
+        sess["event"].set()
 
 # ─── RECEPTOR DE TEXTO (WM text + links) ─────────────────────────────────────
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
@@ -2765,78 +2771,6 @@ async def handle_text_input(client: Client, message: Message):
         await message.reply_text(
             f"📥 {len(urls)} enlaces añadidos a la cola.{subs_note}\n"
             f"🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
-
-
-# ─── TORRENT CALLBACK ─────────────────────────────────────────────────────────
-@bot.on_callback_query(filters.regex(r"^tr_"))
-async def handle_torrent_callback(client: Client, cb: CallbackQuery):
-    import shutil
-    uid   = str(cb.from_user.id)
-    data  = cb.data
-    parts = data.split(":")
-    if len(parts) < 3 or parts[1] != uid:
-        await cb.answer("❌ No puedes controlar la selección de otro usuario.", show_alert=True)
-        return
-    sess = _torrent_sessions.get(uid)
-    if not sess:
-        await cb.answer("⚠️ Sesión expirada. Envía el torrent de nuevo.", show_alert=True)
-        try: await cb.message.edit_reply_markup(reply_markup=None)
-        except Exception: pass
-        return
-    action   = parts[0]
-    task_id  = sess["task_id"]
-    uname    = sess["uname"]
-    source   = sess["source"]
-    dl_dir   = sess["dl_dir"]
-    meta_dir = sess.get("meta_dir", "")
-    files    = sess["files"]
-    msg      = cb.message
-    want_subs = sess.get("want_subs", False)
-    await cb.answer()
-
-    if action == "tr_cxl":
-        _torrent_sessions.pop(uid, None)
-        active_tasks.pop(task_id, None)
-        shutil.rmtree(dl_dir, ignore_errors=True)
-        shutil.rmtree(meta_dir, ignore_errors=True)
-        await msg.edit_text(
-            f"╭ Task By → 「{uname}」\n┊ 🛑 Descarga cancelada.\n"
-            f"╰──────────────\n\n{BOT_SIGNATURE}", reply_markup=None)
-        return
-
-    if action == "tr_sel":
-        file_idx       = int(parts[3]) if len(parts) > 3 else None
-        select_indices = [file_idx] if file_idx else None
-        fname          = next((f for i, f, s in files if i == file_idx), f"archivo {file_idx}")
-    else:
-        select_indices = None
-        fname          = f"todos ({len(files)} episodios)"
-
-    _torrent_sessions.pop(uid, None)
-    await msg.edit_text(
-        f"╭ Task By → 「{uname}」\n┊ 🧲 Descargando: {str(fname)[:50]}\n"
-        f"┊ ⚠️ /cancel para detener\n╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}",
-        reply_markup=None)
-
-    async def _do_download():
-        try:
-            await _run_torrent_download(client, cb.message, msg, uname, task_id,
-                                         source, dl_dir, select_indices=select_indices)
-            await _torrent_encode_and_send(client, cb.message, msg, uname, task_id,
-                                            dl_dir, want_subs=want_subs)
-        except (Exception, asyncio.CancelledError) as e:
-            is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
-            if is_cancel: _stats["cancelados"] += 1
-            else: _stats["fallidos"] += 1
-            err = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:200]}"
-            try: await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ {err}\n╰──────────────\n\n{BOT_SIGNATURE}")
-            except Exception: pass
-        finally:
-            active_tasks.pop(task_id, None)
-            shutil.rmtree(dl_dir, ignore_errors=True)
-            shutil.rmtree(meta_dir, ignore_errors=True)
-
-    asyncio.create_task(_do_download())
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
