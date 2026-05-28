@@ -54,7 +54,7 @@ _torrent_sessions: dict = {}
 
 download_queue: asyncio.Queue = asyncio.Queue()
 
-_stats = {"downloads": 0}
+_stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
 
@@ -490,6 +490,10 @@ async def _ensure_jpeg(path: str) -> str:
 # ─── SUBIDA INTELIGENTE ───────────────────────────────────────────────────────
 async def upload_smart_file(client: Client, message: Message, path: str,
                              msg: Message, uname: str, task_id: str, title: str = ""):
+    try:
+        _stats["bytes"] += os.path.getsize(path)
+    except Exception:
+        pass
     fname   = os.path.basename(path)
     display = title.strip() if title.strip() else fname
     lower   = fname.lower()
@@ -1382,6 +1386,8 @@ async def procesar_descarga(client: Client, message: Message, url: str,
 
     except (asyncio.CancelledError, Exception) as e:
         is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else: _stats["fallidos"] += 1
         err       = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:200]}"
         try:
             await safe_edit(msg,
@@ -1492,6 +1498,8 @@ async def procesar_audio(client: Client, message: Message, url: str, uname: str,
 
     except (Exception, asyncio.CancelledError) as e:
         is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else: _stats["fallidos"] += 1
         err = "🛑 Cancelado." if is_cancel else f"❌ Error: {str(e)[:200]}"
         try: await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ {err}\n╰──────────────\n\n{BOT_SIGNATURE}")
         except Exception: pass
@@ -1635,6 +1643,8 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
         except Exception: pass
     except (Exception, asyncio.CancelledError) as e:
         is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else: _stats["fallidos"] += 1
         err = "🛑 Playlist cancelada." if is_cancel else f"❌ Error: {str(e)[:200]}"
         try: await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ {err}\n╰──────────────\n\n{BOT_SIGNATURE}")
         except Exception: pass
@@ -1891,6 +1901,8 @@ async def procesar_torrent(client: Client, message: Message, source: str,
         await _torrent_encode_and_send(client, message, msg, uname, task_id, dl_dir, want_subs=want_subs)
     except (Exception, asyncio.CancelledError) as e:
         is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else: _stats["fallidos"] += 1
         err = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:200]}"
         try: await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ {err}\n╰──────────────\n\n{BOT_SIGNATURE}", reply_markup=None)
         except Exception: pass
@@ -1985,25 +1997,36 @@ async def cmd_getcode(client: Client, message: Message):
 async def cmd_stat(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
     uptime   = get_readable_time(time.time() - start_time)
-    ram      = psutil.virtual_memory()
+    sys_ram  = psutil.virtual_memory()
+    try:
+        proc_ram = psutil.Process().memory_info().rss
+    except Exception:
+        proc_ram = 0
     disk     = psutil.disk_usage("/tmp")
-    cpu      = psutil.cpu_percent(interval=0.5)
     server   = platform.node()
-    plat     = platform.system() + " " + platform.release()
-    cpu_info = platform.processor() or platform.machine()
+    plat     = platform.system().lower() + " " + platform.release()
+    cpu_count = psutil.cpu_count(logical=True) or 1
+    try:
+        with open("/proc/cpuinfo") as _f:
+            _lines = [l for l in _f if l.startswith("model name")]
+            cpu_model = _lines[0].split(":", 1)[1].strip() if _lines else platform.processor() or platform.machine()
+    except Exception:
+        cpu_model = platform.processor() or platform.machine()
     active   = len(active_tasks)
-    in_queue = download_queue.qsize()
     await message.reply_text(
         f"╭─ Status Panel\n"
-        f"┊ 🕐 Time on  : {uptime}\n"
-        f"┊ 🧠 RAM      : {ram.percent:.1f}% ({get_readable_size(ram.used)}/{get_readable_size(ram.total)})\n"
-        f"┊ 💾 Storage  : {get_readable_size(disk.used)}/{get_readable_size(disk.total)}\n"
-        f"┊ 🖥️ Server   : {server}\n"
-        f"┊ ⚙️ Platform : {plat}\n"
-        f"┊ 🔧 CPU      : {cpu}% — {cpu_info}\n"
-        f"┊ ⚡ Activas  : {active} | En cola: {in_queue}\n"
-        f"┊ 📥 Descargas: {_stats['downloads']} (sesión)\n"
-        f"╰─ Engine    : yt-dlp / Pyrogram\n\n"
+        f"┊ 🕐 Time on    : {uptime}\n"
+        f"┊ 🧠 RAM        : {get_readable_size(proc_ram)} (sys {get_readable_size(sys_ram.used)} / {get_readable_size(sys_ram.total)})\n"
+        f"┊ 💾 Storage    : {get_readable_size(disk.used)} / {get_readable_size(disk.total)}\n"
+        f"┊ 🖥️ Server     : {server}\n"
+        f"┊ ⚙️ Platform   : {plat}\n"
+        f"┊ 🔧 CPU        : {cpu_model} x{cpu_count}\n"
+        f"┊ 🎬 Procesados : {_stats['downloads']}\n"
+        f"┊ ❌ Fallidos   : {_stats['fallidos']}\n"
+        f"┊ ⛔️ Cancelados : {_stats['cancelados']}\n"
+        f"┊ 📦 Datos      : {get_readable_size(_stats['bytes'])}\n"
+        f"┊ ⚡️ En proceso : {active}\n"
+        f"╰─ Engine      : CRDWV2\n\n"
         f"{BOT_SIGNATURE}"
     )
 
@@ -2254,12 +2277,16 @@ async def cmd_reset(client: Client, message: Message):
             os.remove(f)
         except Exception: pass
     gc.collect()
+    _stats["downloads"] = 0
+    _stats["fallidos"]  = 0
+    _stats["cancelados"] = 0
+    _stats["bytes"]     = 0
     await msg.edit_text(
         f"╭─「 Reset Completado ✅ 」\n"
         f"┊ 🔄 Estado    : Online\n"
-        f"┊ 🕐 Uptime    : 0s\n"
         f"┊ 🧹 Liberado  : {get_readable_size(freed)}\n"
-        f"┊ ⛔ Descargas : {'Canceladas' if cancelled > 0 else 'Ninguna activa'}\n"
+        f"┊ ⛔ Tareas    : {'Canceladas' if cancelled > 0 else 'Ninguna activa'}\n"
+        f"┊ 📊 Stats     : Reiniciados\n"
         f"╰─ Engine      : CRDWV2\n\n"
         f"{BOT_SIGNATURE}"
     )
@@ -2644,6 +2671,8 @@ async def handle_torrent_callback(client: Client, cb: CallbackQuery):
                                             dl_dir, want_subs=want_subs)
         except (Exception, asyncio.CancelledError) as e:
             is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+            if is_cancel: _stats["cancelados"] += 1
+            else: _stats["fallidos"] += 1
             err = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:200]}"
             try: await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ {err}\n╰──────────────\n\n{BOT_SIGNATURE}")
             except Exception: pass
