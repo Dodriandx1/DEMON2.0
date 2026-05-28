@@ -225,47 +225,79 @@ def get_spanish_sub_index(input_path: str):
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "s",
-             "-show_entries", "stream=index:stream_tags=language",
-             "-of", "csv=p=0", input_path],
+             "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
+             "-of", "json", input_path],
             capture_output=True, text=True, timeout=10
         )
+        data = json.loads(result.stdout)
         first_idx = None
-        for line in result.stdout.strip().splitlines():
-            parts = line.split(",")
-            if not parts or not parts[0]: continue
-            
-            idx = parts[0]
-            # Guardamos el primer subtítulo encontrado como respaldo
-            if first_idx is None: 
-                first_idx = idx
+        
+        if data.get("streams"):
+            first_idx = str(data["streams"][0].get("index"))
+
+        # Prioridad 1: Latino Forzado (Ideal para animes doblados)
+        for stream in data.get("streams", []):
+            idx = str(stream.get("index"))
+            tags = stream.get("tags", {})
+            title = tags.get("title", "").lower()
+            if ("lat" in title or "latinoamérica" in title) and "forced" in title:
+                return idx
+
+        # Prioridad 2: Latino General
+        for stream in data.get("streams", []):
+            idx = str(stream.get("index"))
+            tags = stream.get("tags", {})
+            title = tags.get("title", "").lower()
+            if "lat" in title or "latino" in title or "latinoamérica" in title:
+                return idx
+
+        # Prioridad 3: Español España / General
+        for stream in data.get("streams", []):
+            idx = str(stream.get("index"))
+            tags = stream.get("tags", {})
+            lang = tags.get("language", "").lower()
+            title = tags.get("title", "").lower()
+            # "es" solo se usa para el código exacto del idioma, no como parte del título
+            if lang in ("spa", "es") or "español" in title or "spanish" in title:
+                return idx
                 
-            if len(parts) >= 2:
-                lang = parts[1].lower()
-                if lang in ("spa", "es", "lat", "latino", "español"):
-                    return idx
-                    
-        # Si no encontró etiqueta "es/spa", retorna el primero que haya encontrado
         return first_idx 
-    except Exception:
+    except Exception as e:
+        print(f"[Sub Index] Error: {e}")
         pass
-    return None 
-    
-def get_audio_index_by_lang(input_path: str, langs: tuple = ("spa", "es", "lat", "latino", "español")) -> str:
+    return None
+
+def get_audio_index_by_lang(input_path: str) -> str:
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a",
-             "-show_entries", "stream=index:stream_tags=language,title",
-             "-of", "csv=p=0", input_path],
+             "-show_entries", "stream=index:stream_tags=language:stream_tags=title",
+             "-of", "json", input_path],
             capture_output=True, text=True, timeout=10
         )
-        for line in result.stdout.strip().splitlines():
-            parts = [p.lower() for p in line.split(",")]
-            if len(parts) >= 1:
-                idx = parts[0]
-                for tag in parts[1:]:
-                    if any(l in tag for l in langs):
-                        return idx
-    except Exception:
+        data = json.loads(result.stdout)
+        
+        # 1. Buscar explícitamente Latino en el título
+        for stream in data.get("streams", []):
+            idx = str(stream.get("index"))
+            tags = stream.get("tags", {})
+            title = tags.get("title", "").lower()
+            if "lat" in title or "latino" in title or "latinoamérica" in title:
+                return idx
+
+        # 2. Buscar Español general (evitando falsos positivos con Japonés/Inglés)
+        for stream in data.get("streams", []):
+            idx = str(stream.get("index"))
+            tags = stream.get("tags", {})
+            lang = tags.get("language", "").lower()
+            title = tags.get("title", "").lower()
+            
+            # Validamos código exacto ("spa", "es") o la palabra completa "español"
+            if lang in ("spa", "es") or "español" in title or "spanish" in title or "spa" in title:
+                return idx
+                
+    except Exception as e:
+        print(f"[Audio Index] Error: {e}")
         pass
     return None 
 
