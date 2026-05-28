@@ -1889,14 +1889,14 @@ async def procesar_torrent(client: Client, message: Message, source: str,
 
 # ─── COLA DE TRABAJO ──────────────────────────────────────────────────────────
 async def queue_worker():
+    print("[worker] Cola iniciada, esperando tareas...")
     while True:
         item = await download_queue.get()
         client, message, url, uname, uid, label = item[:6]
         want_subs = item[6] if len(item) > 6 else False
+        print(f"[worker] Procesando: {url[:60]} para {uname}")
         try:
-            await asyncio.create_task(
-                procesar_descarga(client, message, url, uname, uid, label, want_subs=want_subs)
-            )
+            await procesar_descarga(client, message, url, uname, uid, label, want_subs=want_subs)
         except Exception as e:
             print(f"[worker] error: {e}")
         finally:
@@ -2463,11 +2463,12 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
     filters.text
     & ~filters.command(_EXCLUDE_CMDS)
     & ~filters.regex(r"^/cancel_"),
-    group=-1,
+    group=1,
 )
 async def handle_text_input(client: Client, message: Message):
     uid      = message.from_user.id
     raw_text = message.text.strip()
+    print(f"[handler] msg de uid={uid} auth={is_auth(uid)} texto={raw_text[:60]}")
 
     # Input de texto para marca de agua
     uid_str = str(uid)
