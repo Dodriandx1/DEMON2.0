@@ -1926,12 +1926,14 @@ async def cmd_coms(client: Client, message: Message):
         "• /cancel — Cancelar descarga activa\n\n"
         "🔐 Solo administradores:\n"
         "• /id — Autorizar usuario (responde su mensaje)\n"
+        "• /addid <ID> — Autorizar usuario por ID directo\n"
+        "• /rmid <ID> — Quitar autorización por ID\n"
         "• /users — Ver usuarios autorizados\n"
         "• /stat — Ver estadísticas del servidor\n"
         "• /reset — Cancelar todo y limpiar\n"
         "• /admin — Dar rango admin\n"
         "• /remadmin — Quitar rango admin\n"
-        "• /cancelarID — Quitar autorización\n"
+        "• /cancelarID — Quitar autorización (responde su mensaje)\n"
         "• /coms — Ver esta lista\n\n"
         f"{BOT_SIGNATURE}"
     )
@@ -2131,6 +2133,39 @@ async def cmd_auth_user(client: Client, message: Message):
             f"✅ **Acceso concedido.**\n"
             f"El usuario [{target.first_name}](tg://user?id={target.id}) (`{target.id}`) ahora puede usar el bot."
         )
+
+@bot.on_message(filters.command(["addid", "Addid"]))
+async def cmd_add_by_id(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply_text(
+            f"╭─ Uso correcto:\n┊ /addid <ID numérico>\n"
+            f"╰─ Ejemplo: `/addid 7666238795`\n\n{BOT_SIGNATURE}"
+        )
+        return
+    new_uid = parts[1]
+    authorized_users[new_uid] = {"role": "user", "username": "", "name": ""}
+    save_auth_users()
+    await message.reply_text(
+        f"✅ **ID `{new_uid}` autorizado.**\n"
+        f"Ese usuario ya puede usar el bot.\n\n{BOT_SIGNATURE}"
+    )
+
+@bot.on_message(filters.command(["removebyid", "rmid"]))
+async def cmd_remove_by_id(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    parts = message.text.strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply_text(f"╭─ Uso: /rmid <ID numérico>\n╰─ Ejemplo: `/rmid 7666238795`\n\n{BOT_SIGNATURE}")
+        return
+    uid_str = parts[1]
+    if uid_str in authorized_users:
+        del authorized_users[uid_str]
+        save_auth_users()
+        await message.reply_text(f"❌ ID `{uid_str}` eliminado de la lista.\n\n{BOT_SIGNATURE}")
+    else:
+        await message.reply_text(f"⚠️ El ID `{uid_str}` no estaba en la lista.")
 
 @bot.on_message(filters.command(["cancelarID", "cancelarid", "Removeid", "removeid"]) & filters.reply)
 async def cmd_remove_auth(client: Client, message: Message):
@@ -2454,6 +2489,7 @@ async def process_watermark(client: Client, cb: CallbackQuery,
 # ─── RECEPTOR DE TEXTO (WM text + links) ─────────────────────────────────────
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
+                 "addid", "Addid", "rmid", "removebyid",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
@@ -2487,7 +2523,9 @@ async def handle_text_input(client: Client, message: Message):
     # Links
     if not is_auth(uid):
         await message.reply_text(
-            "⛔ **Acceso denegado.**\nNo estás autorizado para usar este bot.")
+            f"⛔ **Acceso denegado.**\n"
+            f"No estás autorizado. Tu ID es `{uid}`.\n"
+            f"Pídele al admin que ejecute: `/addid {uid}`")
         return
 
     # Si está en flujo WM y envía un link, cancelar WM
