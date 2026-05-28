@@ -1802,23 +1802,13 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         if want_subs:
             # 1. Buscar Audio Latino
             audio_idx = await asyncio.to_thread(get_audio_index_by_lang, input_path)
-            
-if audio_idx is not None:
+
+        if audio_idx is not None:
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n┊ 🎧 Audio Español detectado\n"
                 f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
             audio_map = f"0:{audio_idx}"
             # Se omite el copiado rápido para forzar la compresión más abajo
-        else:
-            if want_subs:
-                # ... (resto del código de extracción de subtítulos que ya arreglamos)
-            cmd = ["ffmpeg", "-y", "-i", input_path, "-map", "0:v:0", "-map", audio_map,
-                   "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                   "-movflags", "+faststart", encoded_path]
-            copy_proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await copy_proc.wait()
-            if copy_proc.returncode == 0 and os.path.exists(encoded_path) and os.path.getsize(encoded_path) > 1024 * 1024:
-                needs_standard_encode = False
         else:
             if want_subs:
                 # 2. Si no hay audio latino, buscar subtítulos
@@ -1827,10 +1817,9 @@ if audio_idx is not None:
                         if f.lower().endswith((".srt", ".vtt", ".ass", ".ssa")):
                             sub_path = os.path.join(root, f); break
                     if sub_path: break
-               if not sub_path:
+                if not sub_path:
                     idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
                     if idx is not None:
-                        # Extraer a .ass
                         extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
                         ext_proc = await asyncio.create_subprocess_exec(
                             "ffmpeg", "-y", "-i", input_path, "-map", f"0:{idx}",
@@ -1840,24 +1829,24 @@ if audio_idx is not None:
                         if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
                             sub_path = extracted_sub
 
-           if sub_path:
-                await safe_edit(msg,
-                    f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES y comprimiendo a 720p...\n"
-                    f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
-                abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
-                sub_proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", input_path,
-                    "-map", "0:v:0", "-map", "0:a:0?",
-                    "-vf", f"scale=-2:'min(720,ih)',subtitles='{abs_sub}':charenc=UTF-8",
-                    "-c:v", "libx264", "-crf", "26", "-preset", "fast",
-                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await sub_proc.wait()
-                if sub_proc.returncode == 0 and os.path.exists(encoded_path):
-                    needs_standard_encode = False
-                else:
-                    if os.path.exists(encoded_path): os.remove(encoded_path)
-                    sub_path = None
+        if sub_path:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES y comprimiendo a 720p...\n"
+                f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
+            abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
+            sub_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", input_path,
+                "-map", "0:v:0", "-map", "0:a:0?",
+                "-vf", f"scale=-2:'min(720,ih)',subtitles='{abs_sub}':charenc=UTF-8",
+                "-c:v", "libx264", "-crf", "26", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", encoded_path,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await sub_proc.wait()
+            if sub_proc.returncode == 0 and os.path.exists(encoded_path):
+                needs_standard_encode = False
+            else:
+                if os.path.exists(encoded_path): os.remove(encoded_path)
+                sub_path = None
 
         if needs_standard_encode:
             await safe_edit(msg,
@@ -1878,7 +1867,7 @@ if audio_idx is not None:
         final_size = os.path.getsize(encoded_path) / 1024 ** 3
         await safe_edit(msg,
             f"╭ Task By → 「{uname}」\n┊ ⬆️ Subiendo MP4 ({final_size:.2f} GB)...\n"
-            f"╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
+            f"╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
         await upload_smart_file(client, message, encoded_path, msg, uname, task_id, title=input_name)
         _stats["downloads"] += 1
         
@@ -1891,11 +1880,10 @@ if audio_idx is not None:
         if encoded_path and os.path.exists(encoded_path):
             try: os.remove(encoded_path)
             except Exception: pass
-        temp_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.srt")
+        temp_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
         if os.path.exists(temp_sub):
             try: os.remove(temp_sub)
-            except Exception: pass 
-                
+            except Exception: pass
 
 async def _run_torrent_download(client, message, msg, uname, task_id, source, dl_dir, select_indices=None):
     cmd = ["aria2c", "--dir", dl_dir, "--seed-time=0",
