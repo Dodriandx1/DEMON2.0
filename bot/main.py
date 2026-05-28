@@ -625,7 +625,7 @@ def probe_video(input_path: str) -> dict:
         return {"codec": "unknown", "duration": 0.0, "audio_codec": "unknown"}
 
 async def encode_video(input_path: str, output_path: str, msg: Message,
-                       uname: str, task_id: str) -> bool:
+                       uname: str, task_id: str, audio_map: str = "0:a?", vf: str = None) -> bool:
     info        = await asyncio.to_thread(probe_video, input_path)
     codec       = info["codec"]
     total_dur   = info["duration"]
@@ -634,12 +634,16 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     is_h264     = codec == "h264"
     is_aac_compat = audio_codec in ("aac", "mp3", "mp4a")
 
-    # Siempre usar -map 0:v:0 y -map 0:a? para evitar streams de subtítulos
-    # y codecs incompatibles con el contenedor MP4
-    base = ["ffmpeg", "-threads", "0", "-i", input_path,
-            "-map", "0:v:0", "-map", "0:a?"]
+    base = ["ffmpeg", "-threads", "0", "-i", input_path, "-map", "0:v:0"]
+    if audio_map:
+        base.extend(["-map", audio_map])
 
-    if is_h264 and is_aac_compat:
+    if vf:
+        cmd = base + ["-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                      "-c:a", "aac", "-b:a", "128k",
+                      "-movflags", "+faststart", "-progress", "pipe:1",
+                      "-nostats", "-y", output_path]
+    elif is_h264 and is_aac_compat:
         cmd = base + ["-c:v", "copy", "-c:a", "copy",
                       "-movflags", "+faststart", "-y", output_path]
     elif is_h264:
@@ -691,8 +695,8 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     if proc.returncode != 0:
         stderr_out = (await proc.stderr.read()).decode(errors="ignore")[-300:]
         print(f"[encode_video] FFmpeg error (rc={proc.returncode}): {stderr_out}")
-    return proc.returncode == 0 and os.path.exists(output_path)
-
+    return proc.returncode == 0 and os.path.exists(output_path) 
+                           
 
 # ─── ENCODE DE ARCHIVO RECIBIDO ───────────────────────────────────────────────
 async def procesar_encode(client: Client, message: Message, file_id: str,
