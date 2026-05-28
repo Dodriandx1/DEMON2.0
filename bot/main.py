@@ -211,7 +211,25 @@ def get_spanish_sub_index(input_path: str):
     except Exception:
         pass
     return None
-
+    
+def get_audio_index_by_lang(input_path: str, langs: tuple = ("spa", "es", "lat", "latino", "español")) -> str:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index:stream_tags=language,title",
+             "-of", "csv=p=0", input_path],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = [p.lower() for p in line.split(",")]
+            if len(parts) >= 1:
+                idx = parts[0]
+                for tag in parts[1:]:
+                    if any(l in tag for l in langs):
+                        return idx
+    except Exception:
+        pass
+    return None 
 
 # ─── MOTOR MEGA NATIVO ────────────────────────────────────────────────────────
 _MEGA_API   = "https://g.api.mega.co.nz/cs"
