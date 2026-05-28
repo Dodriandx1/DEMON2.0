@@ -639,7 +639,7 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
         base.extend(["-map", audio_map])
 
     if vf:
-        cmd = base + ["-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        cmd = base + ["-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", "21",
                       "-c:a", "aac", "-b:a", "128k",
                       "-movflags", "+faststart", "-progress", "pipe:1",
                       "-nostats", "-y", output_path]
@@ -650,7 +650,7 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
         cmd = base + ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                       "-movflags", "+faststart", "-y", output_path]
     else:
-        cmd = base + ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        cmd = base + ["-c:v", "libx264", "-preset", "medium", "-crf", "21",
                       "-c:a", "aac", "-b:a", "128k",
                       "-movflags", "+faststart", "-progress", "pipe:1",
                       "-nostats", "-y", output_path]
