@@ -2577,7 +2577,7 @@ async def handle_video_upload(client: Client, message: Message):
         "┊ Escribe el texto que quieres\n┊ usar como marca de agua:\n┊\n"
         f"╰─ /wm_cancel para cancelar\n\n{BOT_SIGNATURE}", quote=True)
 
-@bot.on_command("wm_cancel")
+@bot.on_message(filters.commmand("wm_cancel"))
 async def cmd_wm_cancel(client: Client, message: Message):
     _wm_sessions.pop(str(message.from_user.id), None)
     await message.reply_text(f"❌ Marca de agua cancelada.\n\n{BOT_SIGNATURE}")
