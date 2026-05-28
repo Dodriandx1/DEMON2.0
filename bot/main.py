@@ -1846,13 +1846,14 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                         if f.lower().endswith((".srt", ".vtt", ".ass", ".ssa")):
                             sub_path = os.path.join(root, f); break
                     if sub_path: break
-                if not sub_path:
+               if not sub_path:
                     idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
                     if idx is not None:
-                        extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.srt")
+                        # Extraer a .ass
+                        extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
                         ext_proc = await asyncio.create_subprocess_exec(
                             "ffmpeg", "-y", "-i", input_path, "-map", f"0:{idx}",
-                            "-c:s", "srt", extracted_sub,
+                            extracted_sub,
                             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                         await ext_proc.wait()
                         if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
@@ -1861,12 +1862,13 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
             if sub_path:
                 await safe_edit(msg,
                     f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES...\n"
-                    f"┊ 🎬 {input_name[:40]}\n╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
-                abs_sub  = os.path.abspath(sub_path).replace('\\', '\\\\').replace(':', '\\:')
+                    f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
+                # Escapar y englobar en comillas simples
+                abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
                 sub_proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-i", input_path,
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-vf", f"subtitles={abs_sub}:charenc=UTF-8",
+                    "-vf", f"subtitles='{abs_sub}':charenc=UTF-8",
                     "-c:v", "libx264", "-crf", "21", "-preset", "medium",
                     "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", encoded_path,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
