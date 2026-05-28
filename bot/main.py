@@ -713,49 +713,85 @@ async def procesar_encode(client: Client, message: Message, file_id: str,
     )
     input_path  = os.path.join(DOWNLOAD_DIR, f"{task_id}_input.mkv")
     output_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_output.mp4")
+    extracted_sub = None
+
     try:
         await client.download_media(file_id, file_name=input_path)
         await safe_edit(msg,
             f"╭ Task By → 「{uname}」\n"
             f"┊ [{make_bar(0)}] 0.00%\n"
-            f"┊ Status   : Convirtiendo a MP4...\n"
+            f"┊ Status   : Analizando pistas de audio...\n"
             f"┊ Archivo  : {original_name[:40]}\n"
             f"╰ Mode     : #Encode\n\n{BOT_SIGNATURE}"
         )
+
+        audio_map = "0:a?"
+        vf_filter = None
+
+        if want_subs:
+            # 1. Buscar Audio Latino
+            audio_idx = await asyncio.to_thread(get_audio_index_by_lang, input_path)
+            if audio_idx is not None:
+                audio_map = f"0:{audio_idx}"
+                await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🎧 Audio Español/Latino detectado\n╰ Mode     : #Encode\n\n{BOT_SIGNATURE}")
+            else:
+                # 2. Si no hay audio latino, buscar y quemar subtítulos
+                sub_idx = await asyncio.to_thread(get_spanish_sub_index, input_path)
+                if sub_idx is not None:
+                    await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Audio ES no encontrado, extrayendo subs...\n╰ Mode     : #Encode\n\n{BOT_SIGNATURE}")
+                    extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.srt")
+                    ext_proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sub_idx}",
+                        "-c:s", "srt", extracted_sub,
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+                    )
+                    await ext_proc.wait()
+                    if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
+                        abs_sub = os.path.abspath(extracted_sub).replace('\\', '\\\\').replace(':', '\\:')
+                        vf_filter = f"subtitles={abs_sub}:charenc=UTF-8"
+                        audio_map = "0:a:0?" # Forzar el primer audio si vamos a quemar subs
+                    else:
+                        extracted_sub = None
+
         success = False
-        if not want_subs:
-            # Fast-copy: mapear solo video+audio para evitar streams incompatibles con MP4
+        # Si no hay subtítulos por quemar, intentamos un copiado rápido (Fast-Copy)
+        if not vf_filter:
             cmd = ["ffmpeg", "-y", "-i", input_path,
-                   "-map", "0:v:0", "-map", "0:a?",
-                   "-c:v", "copy", "-c:a", "copy",
+                   "-map", "0:v:0", "-map", audio_map,
+                   "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                    "-movflags", "+faststart", output_path]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE
-            )
+            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
             _, stderr_bytes = await proc.communicate()
             if proc.returncode == 0 and os.path.exists(output_path):
                 success = True
             else:
-                print(f"[encode] fast-copy falló (rc={proc.returncode}): {stderr_bytes.decode(errors='ignore')[-400:]}")
-        if not success or want_subs:
+                print(f"[encode] fast-copy falló: {stderr_bytes.decode(errors='ignore')[-400:]}")
+
+        # Si el fast-copy falló o tenemos que quemar subtítulos, hacemos un re-encode completo
+        if not success:
             if os.path.exists(output_path):
                 try: os.remove(output_path)
                 except: pass
-            success = await encode_video(input_path, output_path, msg, uname, task_id)
+            success = await encode_video(input_path, output_path, msg, uname, task_id, audio_map=audio_map, vf=vf_filter)
+
         if not success or not os.path.exists(output_path):
             raise Exception("Conversión fallida — revisa los logs del bot para ver el error de FFmpeg")
+
         await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(output_path), 0, 0, 0, task_id))
-        await upload_smart_file(client, message, output_path, msg, uname, task_id,
-                                title=f"{original_name} [MP4]")
+        await upload_smart_file(client, message, output_path, msg, uname, task_id, title=f"{original_name} [MP4]")
+        
+        # Eliminar el panel de carga final
+        try: await msg.delete()
+        except Exception: pass
+
     except Exception as e:
         await safe_edit(msg, f"❌ Error:\n{str(e)[:150]}\n\n{BOT_SIGNATURE}")
     finally:
         active_tasks.pop(task_id, None)
-        for p in [input_path, output_path]:
-            try: os.remove(p)
-            except: pass
+        for p in [input_path, output_path, extracted_sub]:
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except: pass
 
 
 # ─── NÚCLEO DE DESCARGA ───────────────────────────────────────────────────────
