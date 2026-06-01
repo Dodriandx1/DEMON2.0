@@ -57,7 +57,7 @@ download_queue: asyncio.Queue = asyncio.Queue()
 _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 
 # Calidad máxima de descarga (modificable con /quality)
-_max_quality = 720
+_max_quality = 1080
 
 def _build_fmt(h: int) -> tuple[str, str]:
     if h == 0:  # sin límite
