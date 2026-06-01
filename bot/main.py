@@ -749,7 +749,7 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
     msg = await message.reply_text(
         f"╭ Task By → 「{uname}」\n"
         f"┊ [{make_bar(0)}] 0.00%\n"
-        f"┊ Status   : Descargando...\n"
+        f"┊ Status   : Iniciando descarga...\n"
         f"┊ Archivo  : {original_name[:40]}\n"
         f"╰ Mode     : #Encode\n\n{BOT_SIGNATURE}"
     )
@@ -759,28 +759,8 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
 
     try:
         start_t = time.time()
-        # Aquí le pasamos el 'target_msg' en lugar del 'file_id'
         await client.download_media(
             target_msg,
-            file_name=input_path,
-            progress=download_progress,
-            progress_args=(msg, start_t, uname, task_id, "Telegram", "#Encode")
-        )
-        
-        await safe_edit(msg,
-            f"╭ Task By → 「{uname}」\n"
-            f"┊ 🔍 Analizando pistas del archivo...\n"
-            f"╰ Mode      : #Encode\n\n{BOT_SIGNATURE}"
-        )
-    input_path  = os.path.join(DOWNLOAD_DIR, f"{task_id}_input.mkv")
-    output_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_output.mp4")
-    extracted_sub = None
-
-    try:
-        # AÑADIMOS EL TIEMPO Y LA FUNCIÓN DE PROGRESO AQUÍ
-        start_t = time.time()
-        await client.download_media(
-            file_id, 
             file_name=input_path,
             progress=download_progress,
             progress_args=(msg, start_t, uname, task_id, "Telegram", "#Encode")
@@ -795,8 +775,6 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
         tracks = await asyncio.to_thread(get_media_tracks, input_path)
         audio_map = "0:a?"
         vf_filter = None
-
-        # ... (de aquí en adelante el código sigue exactamente igual con lo del menú interactivo) ...
 
         if tracks["audios"] or tracks["subs"]:
             menu_event = asyncio.Event()
