@@ -2252,9 +2252,8 @@ async def cmd_encode(client: Client, message: Message):
         # Archivo de video
         if reply.video or (reply.document and (reply.document.mime_type or "").startswith("video/")):
             file_name = (reply.video.file_name if reply.video else reply.document.file_name) or "video"
-            # ENVIAMOS 'reply' EN VEZ DE 'file_id' AQUÍ ABAJO:
             asyncio.create_task(procesar_encode(client, message, reply, uname, uid, original_name=file_name))
-            return 
+            return
         # Archivo .torrent
         if reply.document and (reply.document.file_name or "").lower().endswith(".torrent"):
             task_id      = f"{uid}_{int(time.time())}"
