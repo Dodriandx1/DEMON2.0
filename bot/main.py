@@ -524,10 +524,11 @@ async def download_progress(current: int, total: int, msg: Message, start_t: flo
     elapsed = now - start_t
     pct     = (current / total * 100) if total > 0 else 0
     speed   = current / elapsed if elapsed > 0 else 0
-    eta     = (total - current) / speed if speed > 0 else 0
+    # Aquí evitamos el cálculo negativo asegurando que total > 0
+    eta     = (total - current) / speed if speed > 0 and total > 0 else 0
     panel   = download_panel(uname, pct, "Download", current, total, speed, elapsed, eta, engine, mode, task_id)
     await safe_edit(msg, panel)
-
+                                 
 async def upload_progress(current: int, total: int, msg: Message, start_t: float,
                           uname: str, task_id: str):
     if active_tasks.get(task_id) == "CANCELLED":
