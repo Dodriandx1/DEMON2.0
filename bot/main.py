@@ -36,6 +36,8 @@ SOCIAL_USERNAME = os.environ.get("SOCIAL_USERNAME", "")
 SOCIAL_PASSWORD = os.environ.get("SOCIAL_PASSWORD", "")
 
 TWITCH_OAUTH = os.environ.get("TWITCH_OAUTH", "")
+TWITCH_USER  = os.environ.get("TWITCH_USER", "")
+TWITCH_PASS  = os.environ.get("TWITCH_PASS", "")
 
 # Owner / admins
 _raw_admin_ids = os.environ.get("ADMIN_IDS", "0")
@@ -1198,7 +1200,10 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     twitch_opts = dict(base_opts)
                     twitch_opts["format"] = "best[height<=1080]/best"
                     twitch_opts.pop("merge_output_format", None)  # Twitch usa TS, no merge
-                    if TWITCH_OAUTH:
+                    if TWITCH_USER and TWITCH_PASS:
+                        twitch_opts["username"] = TWITCH_USER
+                        twitch_opts["password"] = TWITCH_PASS
+                    elif TWITCH_OAUTH:
                         twitch_opts["username"] = ""
                         twitch_opts["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
                     _TWITCH_ATTEMPTS = [twitch_opts]
