@@ -35,6 +35,8 @@ MEGA_PASSWORD = os.environ.get("MEGA_PASSWORD", "")
 SOCIAL_USERNAME = os.environ.get("SOCIAL_USERNAME", "")
 SOCIAL_PASSWORD = os.environ.get("SOCIAL_PASSWORD", "")
 
+TWITCH_OAUTH = os.environ.get("TWITCH_OAUTH", "")
+
 # Owner / admins
 _raw_admin_ids = os.environ.get("ADMIN_IDS", "0")
 ADMIN_ID  = int(_raw_admin_ids.split(",")[0].strip()) if _raw_admin_ids.strip() else 0
@@ -1189,6 +1191,31 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                 continue
                             raise
                     raise last_error or Exception("YouTube bloqueó todos los clientes.")
+                elif "twitch.tv" in url:
+                    # ── Twitch: VOD / Clip ────────────────────────────────────
+                    # Desde 2023 Twitch requiere OAuth para la API de VODs.
+                    # Se pasa el token con username="" password="oauth:<token>".
+                    twitch_opts = dict(base_opts)
+                    twitch_opts["format"] = "best[height<=1080]/best"
+                    twitch_opts.pop("merge_output_format", None)  # Twitch usa TS, no merge
+                    if TWITCH_OAUTH:
+                        twitch_opts["username"] = ""
+                        twitch_opts["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
+                    _TWITCH_ATTEMPTS = [twitch_opts]
+                    # Fallback sin restricción de calidad
+                    fallback_t = dict(twitch_opts); fallback_t["format"] = "best"
+                    _TWITCH_ATTEMPTS.append(fallback_t)
+                    last_err = None
+                    for _t_opts in _TWITCH_ATTEMPTS:
+                        if _stop_evt.is_set(): raise ValueError("USER_CANCELLED")
+                        try:
+                            _extract(_t_opts); break
+                        except Exception as _te:
+                            if _is_cancelled(_te): raise ValueError("USER_CANCELLED")
+                            last_err = _te
+                            continue
+                    else:
+                        raise last_err or Exception("No se pudo descargar el VOD de Twitch.")
                 else:
                     def _is_no_video(e):
                         s = str(e).lower()
