@@ -1,0 +1,19 @@
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.twitch.tv	TRUE	/	FALSE	1815855407	twitch.lohp.countryCode	EC
+.twitch.tv	TRUE	/	TRUE	0	server_session_id	c34fbc9f52104a2093a15f4c14d9742c
+.twitch.tv	TRUE	/	TRUE	1816287599	unique_id	05d2c246d33743bd96193d994cb665d4
+.twitch.tv	TRUE	/	TRUE	1816287599	unique_id_durable	05d2c246d33743bd96193d994cb665d4
+.twitch.tv	TRUE	/	TRUE	1816287400	experiment_overrides	{%22experiments%22:{}%2C%22disabled%22:[]}
+.twitch.tv	TRUE	/	TRUE	1813609131	api_token	c355be7366e1a37ec36c8efa793bf40e
+.twitch.tv	TRUE	/	TRUE	1797711531	spare_key	eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3Bhc3Nwb3J0LnR3aXRjaC50diIsInN1YiI6IltcIjU5MDQyNzI2MVwiXSIsImF1ZCI6ImJydXRlLWZvcmNlLXByb3RlY3Rpb24iLCJleHAiOjE3OTc3MTE1MzAsImlhdCI6MTc4MjE1OTUzMCwibm9uY2UiOiJQOFl0Q2dKTjFiSDV1bGNHYzRpdjNQYXF4QUh4dUxfclFzQUdHTWRib3VJPSJ9.aF16NbY7OfgF5fCYB82O4OOQDO8kSRIM7VkW1O0HlQgJ5Nvn-w8Z5_Ena03_uC8bT_Zpxme68GscSyH7LYBRXw%3D%3D
+.twitch.tv	TRUE	/	TRUE	1813609131	persistent	590427261%3A%3Atm6riq05h5ybldgw0d7cq8e6ukodk7
+.twitch.tv	TRUE	/	TRUE	1782163131	sudo	eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1OTA0MjcyNjEiLCJhdWQiOlsic3VkbyJdLCJleHAiOjE3ODIxNjMxMzAsImlhdCI6MTc4MjE1OTUzMH0=.RtQ8JWgDqC8RmjLnvIYw4adI0NOzenj4riU_g7pG2Z6m8ys0m8WxAcR4HgBUrPvjBBb1xlugs-szclebkPnvFg==
+.twitch.tv	TRUE	/	TRUE	1782764331	bits_sudo	eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1OTA0MjcyNjEiLCJhdWQiOlsic3VkbyIsImJpdHMiXSwiZXhwIjoxNzgyNzY0MzMwLCJpYXQiOjE3ODIxNTk1MzB9.9qMpl8PSkDUTrVWY0W7pbgm0U5X5ky3lcPrTJOWn3slN1enmHzPCbyUjSunBdIAp9biUmFvsagixyp0xsbohHg==
+.twitch.tv	TRUE	/	TRUE	1816287535	login	dodriandx
+.twitch.tv	TRUE	/	FALSE	1813609131	name	dodriandx
+.twitch.tv	TRUE	/	FALSE	1813609131	last_login	2026-06-22T20:18:50Z
+.twitch.tv	TRUE	/	TRUE	1816287535	twilight-user	{%22authToken%22:%22p1khh4m2jmewk6bou6s9r8740nr25h%22%2C%22displayName%22:%22dodriandx%22%2C%22id%22:%22590427261%22%2C%22login%22:%22dodriandx%22%2C%22roles%22:{%22isStaff%22:false}%2C%22version%22:2}
+.twitch.tv	TRUE	/	TRUE	1816287599	auth-token	p1khh4m2jmewk6bou6s9r8740nr25h
