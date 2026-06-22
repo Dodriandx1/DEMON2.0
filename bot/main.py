@@ -1195,21 +1195,28 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     raise last_error or Exception("YouTube bloqueó todos los clientes.")
                 elif "twitch.tv" in url:
                     # ── Twitch: VOD / Clip ────────────────────────────────────
-                    # Desde 2023 Twitch requiere OAuth para la API de VODs.
-                    # Se pasa el token con username="" password="oauth:<token>".
-                    twitch_opts = dict(base_opts)
-                    twitch_opts["format"] = "best[height<=1080]/best"
-                    twitch_opts.pop("merge_output_format", None)  # Twitch usa TS, no merge
+                    # Intentar primero sin credenciales (VODs públicos funcionan).
+                    # Usar credenciales solo como fallback para contenido privado.
+                    _twitch_base = dict(base_opts)
+                    _twitch_base.pop("merge_output_format", None)  # Twitch usa TS/m3u8
+                    _twitch_base["format"] = "best[height<=1080]/best"
+
+                    # Opciones con credenciales para fallback
+                    _twitch_auth = dict(_twitch_base)
                     if TWITCH_USER and TWITCH_PASS:
-                        twitch_opts["username"] = TWITCH_USER
-                        twitch_opts["password"] = TWITCH_PASS
+                        _twitch_auth["username"] = TWITCH_USER
+                        _twitch_auth["password"] = TWITCH_PASS
                     elif TWITCH_OAUTH:
-                        twitch_opts["username"] = ""
-                        twitch_opts["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
-                    _TWITCH_ATTEMPTS = [twitch_opts]
-                    # Fallback sin restricción de calidad
-                    fallback_t = dict(twitch_opts); fallback_t["format"] = "best"
-                    _TWITCH_ATTEMPTS.append(fallback_t)
+                        _twitch_auth["username"] = ""
+                        _twitch_auth["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
+
+                    # Orden: sin auth → con auth → formato libre sin auth → formato libre con auth
+                    _TWITCH_ATTEMPTS = [_twitch_base]
+                    if TWITCH_USER or TWITCH_OAUTH:
+                        _TWITCH_ATTEMPTS.append(_twitch_auth)
+                    _free = dict(_twitch_base); _free["format"] = "best"
+                    _TWITCH_ATTEMPTS.append(_free)
+
                     last_err = None
                     for _t_opts in _TWITCH_ATTEMPTS:
                         if _stop_evt.is_set(): raise ValueError("USER_CANCELLED")
