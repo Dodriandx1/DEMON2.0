@@ -1306,10 +1306,20 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             raise
                     raise last_error or Exception("YouTube bloqueó todos los clientes.")
                 elif "twitch.tv" in url:
-                    # ── Twitch: VOD / Clip ────────────────────────────────────
+                    # ── Twitch: VOD / Clip / Live ─────────────────────────────
                     _twitch_base = dict(base_opts)
-                    _twitch_base.pop("merge_output_format", None)  # Twitch usa TS/m3u8
-                    _twitch_base["format"] = "best[height<=1080]/best"
+                    # Para clips/VODs de Twitch (HLS), forzamos salida mp4 con postprocessor
+                    _twitch_base["merge_output_format"] = "mp4"
+                    _twitch_base["postprocessors"] = [
+                        {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
+                    ]
+                    # Clips: formato directo; VODs: preferir 1080p60
+                    if "/clip/" in url or "clips.twitch.tv" in url:
+                        _twitch_base["format"] = "best[height<=1080]/best"
+                    else:
+                        _twitch_base["format"] = (
+                            "best[height<=1080][fps<=60]/best[height<=1080]/best"
+                        )
 
                     # Opciones con credenciales OAuth
                     _twitch_auth = dict(_twitch_base)
@@ -1320,12 +1330,12 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         _twitch_auth["username"] = ""
                         _twitch_auth["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
 
-                    # Si hay credenciales, intentar CON auth primero (VODs de subs requieren auth)
-                    # Luego sin auth como fallback para VODs públicos
+                    # Con auth primero (VODs de subs), luego sin auth (VODs públicos/clips)
                     if TWITCH_USER or TWITCH_OAUTH:
                         _TWITCH_ATTEMPTS = [_twitch_auth, _twitch_base]
                     else:
                         _TWITCH_ATTEMPTS = [_twitch_base]
+                    # Último recurso: sin filtro de calidad
                     _free = dict(_twitch_base); _free["format"] = "best"
                     _TWITCH_ATTEMPTS.append(_free)
 
@@ -1344,11 +1354,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             raise Exception(
                                 "VOD de Twitch no encontrado (404).\n"
                                 "Posibles causas:\n"
-                                "• El VOD es de suscriptores → configura el secret TWITCH_OAUTH\n"
+                                "• El VOD es de subs → configura el secret TWITCH_OAUTH\n"
                                 "• El VOD fue eliminado o expiró\n"
-                                "• Usa cookies.txt con tu sesión de Twitch"
+                                "• Sube cookies.txt con tu sesión de Twitch via /cookies"
                             )
-                        raise last_err or Exception("No se pudo descargar el VOD de Twitch.")
+                        raise last_err or Exception("No se pudo descargar de Twitch.")
                 else:
                     def _is_no_video(e):
                         s = str(e).lower()
@@ -2606,7 +2616,6 @@ async def cmd_reset(client: Client, message: Message):
 @bot.on_message(filters.command("cookies"))
 async def cmd_cookies(client: Client, message: Message):
     if not is_admin(message.from_user.id): return
-    # Buscar el documento: puede venir adjunto al mismo mensaje o en el reply
     doc_msg = None
     if message.document:
         doc_msg = message
@@ -2615,39 +2624,158 @@ async def cmd_cookies(client: Client, message: Message):
 
     if doc_msg is None:
         await message.reply_text(
-            "╭─「 🍪 Subir Cookies 」\n"
+            "╭─「 🍪 Subir Cookies Generales 」\n"
             "┊\n"
             "┊ Envía el archivo **cookies.txt** adjunto\n"
-            "┊ a este comando, o responde con /cookies\n"
-            "┊ a un mensaje que contenga el archivo.\n"
+            "┊ a este comando. Si el nombre contiene\n"
+            "┊ 'crunchyroll' se guarda como cookies CR.\n"
             "┊\n"
-            "╰─ Solo admins pueden usar este comando.\n\n"
-            f"{BOT_SIGNATURE}"
+            "┊ Para credenciales de Crunchyroll usa:\n"
+            "┊ /crfiles — gestor completo de credenciales\n"
+            "┊\n"
+            f"╰─ Solo admins.\n\n{BOT_SIGNATURE}"
         )
         return
 
-    fname = (doc_msg.document.file_name or "").lower()
-    if not fname.endswith(".txt"):
+    fname_orig = doc_msg.document.file_name or "cookies.txt"
+    fname_low  = fname_orig.lower()
+    if not fname_low.endswith(".txt"):
         await message.reply_text(
-            f"⚠️ El archivo debe ser un `.txt`.\n"
-            f"Nombre recibido: `{doc_msg.document.file_name}`\n\n{BOT_SIGNATURE}"
+            f"⚠️ El archivo debe ser `.txt`.\n"
+            f"Nombre recibido: `{fname_orig}`\n\n{BOT_SIGNATURE}"
         )
         return
+
+    # Detectar automáticamente si es para Crunchyroll
+    if "crunchyroll" in fname_low or "crunchy" in fname_low:
+        save_path  = "crunchyroll_cookies.txt"
+        label      = "Crunchyroll cookies"
+    else:
+        save_path  = "cookies.txt"
+        label      = "Cookies generales (YouTube, Twitch, etc.)"
 
     msg = await message.reply_text("⏳ Guardando cookies...")
-    cookies_path = "cookies.txt"
     try:
-        await client.download_media(doc_msg, file_name=cookies_path)
-        size = os.path.getsize(cookies_path)
+        await client.download_media(doc_msg, file_name=save_path)
+        size = os.path.getsize(save_path)
         await msg.edit_text(
             f"╭─「 🍪 Cookies actualizadas ✅ 」\n"
-            f"┊ 📄 Archivo : `cookies.txt`\n"
+            f"┊ 📄 Tipo    : {label}\n"
+            f"┊ 💾 Archivo : `{save_path}`\n"
             f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
             f"╰─ yt-dlp las usará en la próxima descarga.\n\n"
             f"{BOT_SIGNATURE}"
         )
     except Exception as e:
         await msg.edit_text(f"❌ Error al guardar cookies: `{e}`\n\n{BOT_SIGNATURE}")
+
+
+# ─── GESTOR DE CREDENCIALES CRUNCHYROLL ───────────────────────────────────────
+CRUNCHY_CREDS_DIR = "creds/crunchyroll"
+
+_CRUNCHY_FILE_MAP = {
+    # extensión / nombre → (ruta destino, descripción)
+    "cookies":     ("crunchyroll_cookies.txt", "🍪 Cookies de Crunchyroll"),
+    "wvd":         (f"{CRUNCHY_CREDS_DIR}/device.wvd",   "📱 Widevine Device (.wvd)"),
+    "config":      (f"{CRUNCHY_CREDS_DIR}/mp4.config",   "⚙️ Config mp4decrypt"),
+    "cfg":         (f"{CRUNCHY_CREDS_DIR}/mp4.config",   "⚙️ Config mp4decrypt"),
+    "keys":        (f"{CRUNCHY_CREDS_DIR}/keys.txt",     "🔑 Claves de descifrado"),
+    "key":         (f"{CRUNCHY_CREDS_DIR}/keys.txt",     "🔑 Claves de descifrado"),
+    "license":     (f"{CRUNCHY_CREDS_DIR}/license.bin",  "📜 Licencia binaria"),
+}
+
+def _crunchy_file_dest(filename: str) -> tuple[str, str]:
+    """Retorna (ruta_destino, descripción) según el nombre/extensión del archivo."""
+    fl  = filename.lower()
+    ext = fl.rsplit(".", 1)[-1] if "." in fl else ""
+
+    if "cookie" in fl or "crunchy" in fl:
+        return "crunchyroll_cookies.txt", "🍪 Cookies de Crunchyroll"
+    if ext in _CRUNCHY_FILE_MAP:
+        dest, label = _CRUNCHY_FILE_MAP[ext]
+        return dest, label
+    # Cualquier otro archivo → carpeta creds/crunchyroll/ con nombre original
+    return f"{CRUNCHY_CREDS_DIR}/{filename}", f"📁 {filename}"
+
+
+@bot.on_message(filters.command(["crfiles", "crfile", "crcreds", "crcookies"]))
+async def cmd_crfiles(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+
+    os.makedirs(CRUNCHY_CREDS_DIR, exist_ok=True)
+
+    doc_msg = None
+    if message.document:
+        doc_msg = message
+    elif message.reply_to_message and message.reply_to_message.document:
+        doc_msg = message.reply_to_message
+
+    # ── Sin archivo: mostrar estado actual ──────────────────────────────────
+    if doc_msg is None:
+        check_files = [
+            ("crunchyroll_cookies.txt", "🍪 Cookies CR"),
+            (f"{CRUNCHY_CREDS_DIR}/device.wvd",  "📱 Widevine Device"),
+            (f"{CRUNCHY_CREDS_DIR}/mp4.config",  "⚙️ mp4.config"),
+            (f"{CRUNCHY_CREDS_DIR}/keys.txt",    "🔑 Keys"),
+            (f"{CRUNCHY_CREDS_DIR}/license.bin", "📜 License"),
+        ]
+        lines = []
+        for path, label in check_files:
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                lines.append(f"┊ ✅ {label} ({get_readable_size(os.path.getsize(path))})")
+            else:
+                lines.append(f"┊ ❌ {label} — no subido")
+
+        # Archivos extra en la carpeta
+        extra = []
+        if os.path.isdir(CRUNCHY_CREDS_DIR):
+            known = {"device.wvd", "mp4.config", "keys.txt", "license.bin"}
+            for f in os.listdir(CRUNCHY_CREDS_DIR):
+                if f not in known:
+                    p = os.path.join(CRUNCHY_CREDS_DIR, f)
+                    extra.append(f"┊ 📄 {f} ({get_readable_size(os.path.getsize(p))})")
+
+        body = "\n".join(lines)
+        if extra:
+            body += "\n┊\n┊ Extras:\n" + "\n".join(extra)
+
+        await message.reply_text(
+            f"╭─「 🎌 Crunchyroll — Credenciales 」\n"
+            f"┊\n"
+            f"{body}\n"
+            f"┊\n"
+            f"┊ Adjunta un archivo a /crfiles para subirlo.\n"
+            f"┊ Tipos soportados:\n"
+            f"┊  cookies*.txt → cookies de CR\n"
+            f"┊  *.wvd        → Widevine Device\n"
+            f"┊  *.config/cfg → mp4decrypt config\n"
+            f"┊  *.keys/key   → claves de descifrado\n"
+            f"┊  *.license    → licencia binaria\n"
+            f"╰─ Solo admins.\n\n{BOT_SIGNATURE}"
+        )
+        return
+
+    # ── Con archivo: guardar ─────────────────────────────────────────────────
+    fname     = doc_msg.document.file_name or "archivo"
+    dest, label = _crunchy_file_dest(fname)
+    dest_dir  = os.path.dirname(dest)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+
+    msg = await message.reply_text(f"⏳ Guardando `{fname}`...")
+    try:
+        await client.download_media(doc_msg, file_name=dest)
+        size = os.path.getsize(dest)
+        await msg.edit_text(
+            f"╭─「 🎌 Crunchyroll — Credencial guardada ✅ 」\n"
+            f"┊ 🗂 Tipo    : {label}\n"
+            f"┊ 💾 Guardado: `{dest}`\n"
+            f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
+            f"╰─ Se usará automáticamente en la próxima descarga CR.\n\n"
+            f"{BOT_SIGNATURE}"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Error guardando `{fname}`: `{e}`\n\n{BOT_SIGNATURE}")
 
 # ─── MARCA DE AGUA ────────────────────────────────────────────────────────────
 WM_POS_LABELS = {
@@ -2925,7 +3053,8 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
-                 "encode", "Encode", "torrent", "cookies"]
+                 "encode", "Encode", "torrent", "cookies",
+                 "crfiles", "crfile", "crcreds", "crcookies"]
 
 @bot.on_message(
     filters.text
