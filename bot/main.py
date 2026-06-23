@@ -744,6 +744,118 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
         print(f"[encode_video] FFmpeg error (rc={proc.returncode}): {stderr_out}")
     return proc.returncode == 0 and os.path.exists(output_path)
 
+
+def _crunchy_cookie_path() -> str | None:
+    for p in ["crunchyroll_cookies.txt", "telegram-bot/crunchyroll_cookies.txt",
+              "cookies.txt", "telegram-bot/cookies.txt"]:
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    return None
+
+
+# ─── CRUNCHYROLL DOWNLOADER (1080p + Subtítulos) ──────────────────────────────
+async def procesar_crunchyroll(client: Client, message: Message, url: str,
+                               uname: str, uid: int, want_subs: bool = False):
+    task_id = f"{uid}_{int(time.time())}"
+    active_tasks[task_id] = "RUNNING"
+
+    msg = await message.reply_text(
+        f"╭ Task By → 「{uname}」\n"
+        f"┊ [{make_bar(0)}] 0.00%\n"
+        f"┊ Status   : Conectando a Crunchyroll...\n"
+        f"╰ Mode     : #CRDWV2\n\n{BOT_SIGNATURE}"
+    )
+    path        = None
+    video_title = "Episode"
+    start_t     = time.time()
+    loop        = asyncio.get_running_loop()
+
+    try:
+        cookie_path = _crunchy_cookie_path()
+
+        def ydl_hook(d):
+            if active_tasks.get(task_id) == "CANCELLED": raise ValueError("USER_CANCELLED")
+            if d["status"] == "downloading":
+                curr  = d.get("downloaded_bytes", 0)
+                total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                if total > 0:
+                    asyncio.run_coroutine_threadsafe(
+                        download_progress(curr, total, msg, start_t, uname, task_id, "yt-dlp", "#CR1080P"), loop)
+
+        opts = {
+            "outtmpl":              f"{DOWNLOAD_DIR}{task_id}_%(title)s.%(ext)s",
+            "quiet":                True,
+            "no_warnings":          True,
+            "progress_hooks":       [ydl_hook],
+            "format":               "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+            "merge_output_format":  "mp4",
+            "retries":              20,
+            "fragment_retries":     20,
+            "http_headers": {
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/134.0.0.0 Safari/537.36")
+            },
+        }
+
+        if cookie_path:
+            opts["cookiefile"] = cookie_path
+
+        if want_subs:
+            opts.update({
+                "writesubtitles":    True,
+                "writeautomaticsub": True,
+                "subtitleslangs":    ["es", "es-419", "es-MX"],
+                "subtitlesformat":   "srt/best",
+            })
+
+        await safe_edit(msg,
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ [{make_bar(0)}] 0.00%\n"
+            f"┊ Status   : Descargando en 1080p...\n"
+            f"┊ 🍪 Cookies: {'✅' if cookie_path else '❌ usa /cookies'}\n"
+            f"╰ Mode     : #CRDWV2\n\n{BOT_SIGNATURE}"
+        )
+
+        def run_ydl():
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=True)
+
+        info        = await asyncio.to_thread(run_ydl)
+        video_title = (info.get("title") or "Episode") if info else "Episode"
+
+        files = sorted(glob.glob(f"{DOWNLOAD_DIR}{task_id}_*.mp4"), key=os.path.getsize, reverse=True)
+        path  = files[0] if files else None
+
+    except Exception as e:
+        err_str = str(e)
+        if "drm" in err_str.lower() or "protected" in err_str.lower():
+            await safe_edit(msg,
+                f"❌ DRM protegido: Las cookies pueden estar caducadas.\n"
+                f"Actualiza las cookies de Crunchyroll con /cookies.\n\n{BOT_SIGNATURE}")
+        elif any(k in err_str.lower() for k in ("login", "sign in", "premium", "not available")):
+            await safe_edit(msg,
+                f"❌ Se requiere cuenta Premium de Crunchyroll.\n"
+                f"Sube tus cookies con /cookies primero.\n\n{BOT_SIGNATURE}")
+        else:
+            await safe_edit(msg, f"❌ Error Crunchyroll:\n{err_str[:200]}\n\n{BOT_SIGNATURE}")
+        active_tasks.pop(task_id, None)
+        return
+    finally:
+        active_tasks.pop(task_id, None)
+
+    if path and os.path.exists(path):
+        await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(path), 0, 0, 0, task_id))
+        await upload_smart_file(client, message, path, msg, uname, task_id, title=video_title)
+        _stats["downloads"] += 1
+        try: await msg.delete()
+        except Exception: pass
+        try: os.remove(path)
+        except Exception: pass
+    else:
+        await safe_edit(msg, f"❌ Crunchyroll: No se pudo descargar el episodio.\n\n{BOT_SIGNATURE}")
+
+
 # ─── ENCODE DE ARCHIVO RECIBIDO ───────────────────────────────────────────────
 async def procesar_encode(client: Client, message: Message, target_msg: Message,
                           uname: str, uid: int, want_subs: bool = False,
@@ -1596,6 +1708,7 @@ async def procesar_audio(client: Client, message: Message, url: str, uname: str,
                 ],
             }
             if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
+            elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
@@ -1673,6 +1786,7 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
             opts = {"quiet": True, "no_warnings": True,
                     "extract_flat": "in_playlist", "skip_download": True}
             if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
+            elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return ydl.extract_info(url, download=False)
         info = await asyncio.to_thread(extract_info_only)
@@ -1731,6 +1845,7 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
                     ],
                 }
                 if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
+                elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     inf = ydl.extract_info(_url, download=True)
                     if inf:
@@ -2810,7 +2925,7 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
-                 "encode", "Encode", "torrent"]
+                 "encode", "Encode", "torrent", "cookies"]
 
 @bot.on_message(
     filters.text
@@ -2857,21 +2972,27 @@ async def handle_text_input(client: Client, message: Message):
     if not urls: return
 
     uname = message.from_user.first_name
+    queued = 0
     for i, url in enumerate(urls, 1):
         url   = re.sub(r"\s*-lat\s*$", "", url, flags=re.IGNORECASE).strip()
         label = f"Cola: {i}/{len(urls)}"
-        await download_queue.put((client, message, url, uname, uid, label, want_subs))
+        if "crunchyroll.com" in url.lower():
+            asyncio.create_task(procesar_crunchyroll(client, message, url, uname, uid, want_subs))
+        else:
+            await download_queue.put((client, message, url, uname, uid, label, want_subs))
+            queued += 1
 
-    q        = download_queue.qsize()
     subs_note = " 🔤 (-lat: subtítulos ES)" if want_subs else ""
-    if len(urls) == 1:
-        await message.reply_text(
-            f"📥 Enlace añadido a la cola.{subs_note}\n"
-            f"🚦 Tareas en espera: {q}\n\n{BOT_SIGNATURE}")
-    else:
-        await message.reply_text(
-            f"📥 {len(urls)} enlaces añadidos a la cola.{subs_note}\n"
-            f"🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
+    if queued > 0:
+        q = download_queue.qsize()
+        if queued == 1 and len(urls) == 1:
+            await message.reply_text(
+                f"📥 Enlace añadido a la cola.{subs_note}\n"
+                f"🚦 Tareas en espera: {q}\n\n{BOT_SIGNATURE}")
+        elif queued > 0:
+            await message.reply_text(
+                f"📥 {queued} enlace(s) añadido(s) a la cola.{subs_note}\n"
+                f"🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
