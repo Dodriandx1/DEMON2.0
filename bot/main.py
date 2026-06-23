@@ -2479,6 +2479,52 @@ async def cmd_reset(client: Client, message: Message):
         f"{BOT_SIGNATURE}"
     )
 
+@bot.on_message(filters.command("cookies"))
+async def cmd_cookies(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    # Buscar el documento: puede venir adjunto al mismo mensaje o en el reply
+    doc_msg = None
+    if message.document:
+        doc_msg = message
+    elif message.reply_to_message and message.reply_to_message.document:
+        doc_msg = message.reply_to_message
+
+    if doc_msg is None:
+        await message.reply_text(
+            "╭─「 🍪 Subir Cookies 」\n"
+            "┊\n"
+            "┊ Envía el archivo **cookies.txt** adjunto\n"
+            "┊ a este comando, o responde con /cookies\n"
+            "┊ a un mensaje que contenga el archivo.\n"
+            "┊\n"
+            "╰─ Solo admins pueden usar este comando.\n\n"
+            f"{BOT_SIGNATURE}"
+        )
+        return
+
+    fname = (doc_msg.document.file_name or "").lower()
+    if not fname.endswith(".txt"):
+        await message.reply_text(
+            f"⚠️ El archivo debe ser un `.txt`.\n"
+            f"Nombre recibido: `{doc_msg.document.file_name}`\n\n{BOT_SIGNATURE}"
+        )
+        return
+
+    msg = await message.reply_text("⏳ Guardando cookies...")
+    cookies_path = "cookies.txt"
+    try:
+        await client.download_media(doc_msg, file_name=cookies_path)
+        size = os.path.getsize(cookies_path)
+        await msg.edit_text(
+            f"╭─「 🍪 Cookies actualizadas ✅ 」\n"
+            f"┊ 📄 Archivo : `cookies.txt`\n"
+            f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
+            f"╰─ yt-dlp las usará en la próxima descarga.\n\n"
+            f"{BOT_SIGNATURE}"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Error al guardar cookies: `{e}`\n\n{BOT_SIGNATURE}")
+
 # ─── MARCA DE AGUA ────────────────────────────────────────────────────────────
 WM_POS_LABELS = {
     "topleft":  "↖ Arriba Izq",
