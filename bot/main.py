@@ -1195,13 +1195,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     raise last_error or Exception("YouTube bloqueó todos los clientes.")
                 elif "twitch.tv" in url:
                     # ── Twitch: VOD / Clip ────────────────────────────────────
-                    # Intentar primero sin credenciales (VODs públicos funcionan).
-                    # Usar credenciales solo como fallback para contenido privado.
                     _twitch_base = dict(base_opts)
                     _twitch_base.pop("merge_output_format", None)  # Twitch usa TS/m3u8
                     _twitch_base["format"] = "best[height<=1080]/best"
 
-                    # Opciones con credenciales para fallback
+                    # Opciones con credenciales OAuth
                     _twitch_auth = dict(_twitch_base)
                     if TWITCH_USER and TWITCH_PASS:
                         _twitch_auth["username"] = TWITCH_USER
@@ -1210,10 +1208,12 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         _twitch_auth["username"] = ""
                         _twitch_auth["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
 
-                    # Orden: sin auth → con auth → formato libre sin auth → formato libre con auth
-                    _TWITCH_ATTEMPTS = [_twitch_base]
+                    # Si hay credenciales, intentar CON auth primero (VODs de subs requieren auth)
+                    # Luego sin auth como fallback para VODs públicos
                     if TWITCH_USER or TWITCH_OAUTH:
-                        _TWITCH_ATTEMPTS.append(_twitch_auth)
+                        _TWITCH_ATTEMPTS = [_twitch_auth, _twitch_base]
+                    else:
+                        _TWITCH_ATTEMPTS = [_twitch_base]
                     _free = dict(_twitch_base); _free["format"] = "best"
                     _TWITCH_ATTEMPTS.append(_free)
 
@@ -1227,6 +1227,15 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             last_err = _te
                             continue
                     else:
+                        _err_str = str(last_err).lower() if last_err else ""
+                        if "404" in _err_str or "not found" in _err_str:
+                            raise Exception(
+                                "VOD de Twitch no encontrado (404).\n"
+                                "Posibles causas:\n"
+                                "• El VOD es de suscriptores → configura el secret TWITCH_OAUTH\n"
+                                "• El VOD fue eliminado o expiró\n"
+                                "• Usa cookies.txt con tu sesión de Twitch"
+                            )
                         raise last_err or Exception("No se pudo descargar el VOD de Twitch.")
                 else:
                     def _is_no_video(e):
