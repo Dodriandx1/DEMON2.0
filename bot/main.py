@@ -1384,6 +1384,118 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             if _is_no_video(_e2): return
                             raise _e2
 
+            # ─── INSTAGRAM API-FIRST (antes de yt-dlp) ───────────────────────
+            if "instagram.com" in url.lower():
+                _sc = re.search(r'/(?:p|reel|tv|reels)/([A-Za-z0-9_-]+)', url)
+                _shortcode = _sc.group(1) if _sc else None
+                if _shortcode:
+                    _ig_media: list[tuple[str, bool]] = []
+                    _ig_title = ""
+                    for _ua in [
+                        ("Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 Instagram/303.2.0"),
+                        ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                         "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram/303.2.0.13.103"),
+                    ]:
+                        if _ig_media: break
+                        _ig_hdrs = {
+                            "User-Agent": _ua,
+                            "X-IG-App-ID": "936619743392459",
+                            "Accept": "application/json, text/plain, */*",
+                            "Accept-Language": "en-US,en;q=0.9",
+                        }
+                        for _ep in [
+                            f"https://www.instagram.com/p/{_shortcode}/?__a=1&__d=dis",
+                            f"https://www.instagram.com/reel/{_shortcode}/?__a=1&__d=dis",
+                        ]:
+                            if _ig_media: break
+                            try:
+                                async with httpx.AsyncClient(timeout=20, follow_redirects=True) as _h:
+                                    _r = await _h.get(_ep, headers=_ig_hdrs)
+                                    if _r.status_code != 200: continue
+                                    _d = _r.json()
+                                    _items = _d.get("items", [])
+                                    if not _items: continue
+                                    _item = _items[0]
+                                    _ig_title = ((_item.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
+                                    _mtype = _item.get("media_type")
+                                    if _mtype == 8:  # carrusel
+                                        for _cm in _item.get("carousel_media", []):
+                                            if _cm.get("media_type") == 2:
+                                                _vv = _cm.get("video_versions", [])
+                                                if _vv: _ig_media.append((_vv[0]["url"], True))
+                                            else:
+                                                _ic = (_cm.get("image_versions2") or {}).get("candidates", [])
+                                                if _ic: _ig_media.append((_ic[0]["url"], False))
+                                    elif _mtype == 2:  # video único
+                                        _vv = _item.get("video_versions", [])
+                                        if _vv: _ig_media.append((_vv[0]["url"], True))
+                                    else:  # foto única
+                                        _ic = (_item.get("image_versions2") or {}).get("candidates", [])
+                                        if _ic: _ig_media.append((_ic[0]["url"], False))
+                            except Exception:
+                                pass
+
+                    if _ig_media:
+                        _ig_files: list[tuple[str, bool]] = []
+                        for _idx, (_murl, _is_vid) in enumerate(_ig_media):
+                            if active_tasks.get(task_id) == "CANCELLED":
+                                raise asyncio.CancelledError("USER_CANCELLED")
+                            _ext = ".mp4" if _is_vid else ".jpg"
+                            _fp  = os.path.join(DOWNLOAD_DIR, f"{task_id}_ig{_idx}{_ext}")
+                            await safe_edit(msg,
+                                f"╭ Task By → 「{uname}」\n"
+                                f"┊ {'🎬' if _is_vid else '🖼️'} {_idx+1}/{len(_ig_media)} — "
+                                f"{'Video' if _is_vid else 'Foto'}...\n"
+                                f"╰ Mode     : #Instagram\n\n{BOT_SIGNATURE}")
+                            try:
+                                async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _h:
+                                    _resp = await _h.get(_murl,
+                                        headers={"User-Agent": "Instagram/303.2.0"})
+                                    with open(_fp, "wb") as _f:
+                                        _f.write(_resp.content)
+                                if os.path.exists(_fp) and os.path.getsize(_fp) > 500:
+                                    _ig_files.append((_fp, _is_vid))
+                            except Exception:
+                                pass
+
+                        if _ig_files:
+                            if len(_ig_files) == 1:
+                                _sp, _sv = _ig_files[0]
+                                await safe_edit(msg, upload_panel(
+                                    uname, 0, 0, os.path.getsize(_sp), 0, 0, 0, task_id))
+                                await upload_smart_file(
+                                    client, message, _sp, msg, uname, task_id,
+                                    title=_ig_title or "Instagram")
+                            else:
+                                from pyrogram.types import InputMediaPhoto, InputMediaVideo
+                                _album_cap = (f"📸 <b>{_ig_title}</b>\n\n{BOT_SIGNATURE}"
+                                              if _ig_title else f"📸 Instagram\n\n{BOT_SIGNATURE}")
+                                _grp: list = []
+                                for _i2, (_fp2, _sv2) in enumerate(_ig_files):
+                                    _c = _album_cap if _i2 == 0 else None
+                                    if _sv2:
+                                        _grp.append(InputMediaVideo(
+                                            _fp2, caption=_c, parse_mode=enums.ParseMode.HTML))
+                                    else:
+                                        _grp.append(InputMediaPhoto(
+                                            _fp2, caption=_c, parse_mode=enums.ParseMode.HTML))
+                                await safe_edit(msg,
+                                    f"╭ Task By → 「{uname}」\n"
+                                    f"┊ ⬆️ Subiendo álbum ({len(_ig_files)} medios)...\n"
+                                    f"╰ Mode     : #Instagram\n\n{BOT_SIGNATURE}")
+                                for _i2 in range(0, len(_grp), 10):
+                                    await client.send_media_group(
+                                        message.chat.id, _grp[_i2:_i2+10])
+                            _stats["downloads"] += 1
+                            try: await msg.delete()
+                            except Exception: pass
+                            for _fp2, _ in _ig_files:
+                                try: os.remove(_fp2)
+                                except Exception: pass
+                            return  # ← API manejó todo, salir sin tocar yt-dlp
+
+            # ─── yt-dlp (Instagram sin API, YouTube, Twitch, etc.) ───────────
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
                 f"┊ Status   : Extracting...\n"
