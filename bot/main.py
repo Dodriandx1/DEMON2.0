@@ -1384,60 +1384,115 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             if _is_no_video(_e2): return
                             raise _e2
 
-            # ─── INSTAGRAM API-FIRST (antes de yt-dlp) ───────────────────────
+            # ─── INSTAGRAM (multi-API antes de yt-dlp) ───────────────────────
             if "instagram.com" in url.lower():
                 _sc = re.search(r'/(?:p|reel|tv|reels)/([A-Za-z0-9_-]+)', url)
                 _shortcode = _sc.group(1) if _sc else None
                 if _shortcode:
                     _ig_media: list[tuple[str, bool]] = []
                     _ig_title = ""
-                    for _ua in [
-                        ("Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
-                         "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 Instagram/303.2.0"),
-                        ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                         "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram/303.2.0.13.103"),
-                    ]:
-                        if _ig_media: break
-                        _ig_hdrs = {
-                            "User-Agent": _ua,
-                            "X-IG-App-ID": "936619743392459",
-                            "Accept": "application/json, text/plain, */*",
-                            "Accept-Language": "en-US,en;q=0.9",
-                        }
-                        for _ep in [
-                            f"https://www.instagram.com/p/{_shortcode}/?__a=1&__d=dis",
-                            f"https://www.instagram.com/reel/{_shortcode}/?__a=1&__d=dis",
+
+                    # ── Intento 1: instaloader (más fiable, full-res) ─────────
+                    try:
+                        import instaloader as _il
+                        _L = _il.Instaloader(
+                            quiet=True, dirname_pattern="/tmp",
+                            download_pictures=False, download_videos=False,
+                            download_video_thumbnails=False,
+                            download_geotags=False, download_comments=False,
+                            save_metadata=False, compress_json=False,
+                        )
+                        _ck_p = next((p for p in ["cookies.txt", "telegram-bot/cookies.txt"]
+                                      if os.path.exists(p)), None)
+                        if _ck_p:
+                            try: _L.load_session_from_file("", _ck_p)
+                            except Exception: pass
+                        _post = await asyncio.to_thread(
+                            _il.Post.from_shortcode, _L.context, _shortcode)
+                        _ig_title = (_post.caption or "")[:80].replace("\n", " ").strip()
+                        if _post.mediacount and _post.mediacount > 1:
+                            def _get_nodes():
+                                return list(_post.get_sidecar_nodes())
+                            for _nd in await asyncio.to_thread(_get_nodes):
+                                if _nd.is_video:
+                                    _ig_media.append((_nd.video_url, True))
+                                else:
+                                    _ig_media.append((_nd.url, False))
+                        elif _post.is_video:
+                            _ig_media.append((_post.video_url, True))
+                        else:
+                            _ig_media.append((_post.url, False))
+                    except Exception as _ile:
+                        print(f"[Instagram/instaloader] {type(_ile).__name__}: {_ile}")
+
+                    # ── Intento 2: API interna ?__a=1 (verificar JSON real) ────
+                    if not _ig_media:
+                        for _ua2 in [
+                            ("Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 Instagram/303.2.0"),
+                            ("Instagram 303.2.0 Android"),
                         ]:
                             if _ig_media: break
-                            try:
-                                async with httpx.AsyncClient(timeout=20, follow_redirects=True) as _h:
-                                    _r = await _h.get(_ep, headers=_ig_hdrs)
-                                    if _r.status_code != 200: continue
-                                    _d = _r.json()
-                                    _items = _d.get("items", [])
-                                    if not _items: continue
-                                    _item = _items[0]
-                                    _ig_title = ((_item.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
-                                    _mtype = _item.get("media_type")
-                                    if _mtype == 8:  # carrusel
-                                        for _cm in _item.get("carousel_media", []):
-                                            if _cm.get("media_type") == 2:
-                                                _vv = _cm.get("video_versions", [])
-                                                if _vv: _ig_media.append((_vv[0]["url"], True))
+                            _hdrs2 = {"User-Agent": _ua2, "X-IG-App-ID": "936619743392459",
+                                      "Accept": "application/json", "Accept-Language": "en-US"}
+                            for _ep2 in [f"https://www.instagram.com/p/{_shortcode}/?__a=1&__d=dis",
+                                         f"https://www.instagram.com/reel/{_shortcode}/?__a=1&__d=dis"]:
+                                if _ig_media: break
+                                try:
+                                    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as _h2:
+                                        _r2 = await _h2.get(_ep2, headers=_hdrs2)
+                                    if _r2.status_code != 200: continue
+                                    if "application/json" not in _r2.headers.get("content-type", ""): continue
+                                    _d2 = _r2.json()
+                                    _items2 = _d2.get("items", [])
+                                    if not _items2: continue
+                                    _it2 = _items2[0]
+                                    _ig_title = _ig_title or ((_it2.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
+                                    _mt2 = _it2.get("media_type")
+                                    if _mt2 == 8:
+                                        for _cm2 in _it2.get("carousel_media", []):
+                                            if _cm2.get("media_type") == 2:
+                                                _vv2 = _cm2.get("video_versions", [])
+                                                if _vv2: _ig_media.append((_vv2[0]["url"], True))
                                             else:
-                                                _ic = (_cm.get("image_versions2") or {}).get("candidates", [])
-                                                if _ic: _ig_media.append((_ic[0]["url"], False))
-                                    elif _mtype == 2:  # video único
-                                        _vv = _item.get("video_versions", [])
-                                        if _vv: _ig_media.append((_vv[0]["url"], True))
-                                    else:  # foto única
-                                        _ic = (_item.get("image_versions2") or {}).get("candidates", [])
-                                        if _ic: _ig_media.append((_ic[0]["url"], False))
-                            except Exception:
-                                pass
+                                                _ic2 = (_cm2.get("image_versions2") or {}).get("candidates", [])
+                                                if _ic2: _ig_media.append((_ic2[0]["url"], False))
+                                    elif _mt2 == 2:
+                                        _vv2 = _it2.get("video_versions", [])
+                                        if _vv2: _ig_media.append((_vv2[0]["url"], True))
+                                    else:
+                                        _ic2 = (_it2.get("image_versions2") or {}).get("candidates", [])
+                                        if _ic2: _ig_media.append((_ic2[0]["url"], False))
+                                except Exception: pass
 
+                    # ── Intento 3: SnapInstagram API ───────────────────────────
+                    if not _ig_media:
+                        try:
+                            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as _h3:
+                                _r3 = await _h3.post(
+                                    "https://v3.saveinsta.app/api/ajaxSearch",
+                                    data={"q": url, "t": "media", "lang": "en"},
+                                    headers={
+                                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                        "X-Requested-With": "XMLHttpRequest",
+                                        "Referer": "https://saveinsta.app/",
+                                    }
+                                )
+                                _d3 = _r3.json()
+                                if _d3.get("status") == "ok":
+                                    _dat3 = _d3.get("data", {})
+                                    for _img3 in _dat3.get("images", []):
+                                        if _img3.get("url"): _ig_media.append((_img3["url"], False))
+                                    for _vid3 in _dat3.get("videos", []):
+                                        if _vid3.get("url"): _ig_media.append((_vid3["url"], True))
+                        except Exception as _se:
+                            print(f"[Instagram/snapinsta] {_se}")
+
+                    # ── Descargar y enviar si tenemos URLs ────────────────────
                     if _ig_media:
                         _ig_files: list[tuple[str, bool]] = []
+                        _dl_ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         for _idx, (_murl, _is_vid) in enumerate(_ig_media):
                             if active_tasks.get(task_id) == "CANCELLED":
                                 raise asyncio.CancelledError("USER_CANCELLED")
@@ -1449,17 +1504,19 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                 f"{'Video' if _is_vid else 'Foto'}...\n"
                                 f"╰ Mode     : #Instagram\n\n{BOT_SIGNATURE}")
                             try:
-                                async with httpx.AsyncClient(timeout=60, follow_redirects=True) as _h:
-                                    _resp = await _h.get(_murl,
-                                        headers={"User-Agent": "Instagram/303.2.0"})
-                                    with open(_fp, "wb") as _f:
-                                        _f.write(_resp.content)
-                                if os.path.exists(_fp) and os.path.getsize(_fp) > 500:
+                                async with httpx.AsyncClient(timeout=120, follow_redirects=True) as _h:
+                                    async with _h.stream("GET", _murl,
+                                            headers={"User-Agent": _dl_ua}) as _rs:
+                                        with open(_fp, "wb") as _f:
+                                            async for _chunk in _rs.aiter_bytes(1024 * 512):
+                                                _f.write(_chunk)
+                                if os.path.exists(_fp) and os.path.getsize(_fp) > 1000:
                                     _ig_files.append((_fp, _is_vid))
-                            except Exception:
-                                pass
+                            except Exception as _de:
+                                print(f"[Instagram/download] {_de}")
 
                         if _ig_files:
+                            from pyrogram.types import InputMediaPhoto, InputMediaVideo
                             if len(_ig_files) == 1:
                                 _sp, _sv = _ig_files[0]
                                 await safe_edit(msg, upload_panel(
@@ -1468,18 +1525,17 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                     client, message, _sp, msg, uname, task_id,
                                     title=_ig_title or "Instagram")
                             else:
-                                from pyrogram.types import InputMediaPhoto, InputMediaVideo
                                 _album_cap = (f"📸 <b>{_ig_title}</b>\n\n{BOT_SIGNATURE}"
                                               if _ig_title else f"📸 Instagram\n\n{BOT_SIGNATURE}")
                                 _grp: list = []
                                 for _i2, (_fp2, _sv2) in enumerate(_ig_files):
                                     _c = _album_cap if _i2 == 0 else None
                                     if _sv2:
-                                        _grp.append(InputMediaVideo(
-                                            _fp2, caption=_c, parse_mode=enums.ParseMode.HTML))
+                                        _grp.append(InputMediaVideo(_fp2, caption=_c,
+                                            parse_mode=enums.ParseMode.HTML))
                                     else:
-                                        _grp.append(InputMediaPhoto(
-                                            _fp2, caption=_c, parse_mode=enums.ParseMode.HTML))
+                                        _grp.append(InputMediaPhoto(_fp2, caption=_c,
+                                            parse_mode=enums.ParseMode.HTML))
                                 await safe_edit(msg,
                                     f"╭ Task By → 「{uname}」\n"
                                     f"┊ ⬆️ Subiendo álbum ({len(_ig_files)} medios)...\n"
@@ -1493,7 +1549,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             for _fp2, _ in _ig_files:
                                 try: os.remove(_fp2)
                                 except Exception: pass
-                            return  # ← API manejó todo, salir sin tocar yt-dlp
+                            return  # ← API manejó todo
 
             # ─── yt-dlp (Instagram sin API, YouTube, Twitch, etc.) ───────────
             await safe_edit(msg,

@@ -6,3 +6,4 @@ pymongo
 httpx
 beautifulsoup4
 pycryptodome
+instaloader
