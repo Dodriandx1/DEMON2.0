@@ -1392,45 +1392,112 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     _ig_media: list[tuple[str, bool]] = []
                     _ig_title = ""
 
-                    # ── Intento 1: instaloader (más fiable, full-res) ─────────
-                    try:
-                        import instaloader as _il
-                        _L = _il.Instaloader(
-                            quiet=True, dirname_pattern="/tmp",
-                            download_pictures=False, download_videos=False,
-                            download_video_thumbnails=False,
-                            download_geotags=False, download_comments=False,
-                            save_metadata=False, compress_json=False,
-                        )
-                        _ck_p = next((p for p in ["cookies.txt", "telegram-bot/cookies.txt"]
-                                      if os.path.exists(p)), None)
-                        if _ck_p:
-                            try: _L.load_session_from_file("", _ck_p)
-                            except Exception: pass
-                        _post = await asyncio.to_thread(
-                            _il.Post.from_shortcode, _L.context, _shortcode)
-                        _ig_title = (_post.caption or "")[:80].replace("\n", " ").strip()
-                        if _post.mediacount and _post.mediacount > 1:
-                            def _get_nodes():
-                                return list(_post.get_sidecar_nodes())
-                            for _nd in await asyncio.to_thread(_get_nodes):
-                                if _nd.is_video:
-                                    _ig_media.append((_nd.video_url, True))
+                    def _ig_parse_item(it):
+                        """Extrae URLs de un item de la API de Instagram."""
+                        _out: list[tuple[str, bool]] = []
+                        _t = it.get("media_type")
+                        if _t == 8:
+                            for _cm in it.get("carousel_media", []):
+                                if _cm.get("media_type") == 2:
+                                    _vv = _cm.get("video_versions", [])
+                                    if _vv and _vv[0].get("url"): _out.append((_vv[0]["url"], True))
                                 else:
-                                    _ig_media.append((_nd.url, False))
-                        elif _post.is_video:
-                            _ig_media.append((_post.video_url, True))
+                                    _ic = (_cm.get("image_versions2") or {}).get("candidates", [])
+                                    if _ic and _ic[0].get("url"): _out.append((_ic[0]["url"], False))
+                        elif _t == 2:
+                            _vv = it.get("video_versions", [])
+                            if _vv and _vv[0].get("url"): _out.append((_vv[0]["url"], True))
                         else:
-                            _ig_media.append((_post.url, False))
-                    except Exception as _ile:
-                        print(f"[Instagram/instaloader] {type(_ile).__name__}: {_ile}")
+                            _ic = (it.get("image_versions2") or {}).get("candidates", [])
+                            if _ic and _ic[0].get("url"): _out.append((_ic[0]["url"], False))
+                        return _out
 
-                    # ── Intento 2: API interna ?__a=1 (verificar JSON real) ────
+                    _WEB_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/125.0.0.0 Safari/537.36")
+
+                    # ── Intento 1: Embed page (público, sin login) ────────────
+                    if not _ig_media:
+                        for _emb_sc in [_shortcode]:
+                            for _emb_path in ["p", "reel"]:
+                                try:
+                                    async with httpx.AsyncClient(
+                                            timeout=20, follow_redirects=True) as _he:
+                                        _re = await _he.get(
+                                            f"https://www.instagram.com/{_emb_path}/{_emb_sc}/embed/captioned/",
+                                            headers={
+                                                "User-Agent": _WEB_UA,
+                                                "Accept": "text/html,application/xhtml+xml",
+                                                "Accept-Language": "en-US,en;q=0.9",
+                                            })
+                                    if _re.status_code != 200:
+                                        continue
+                                    _ehtml = _re.text
+
+                                    # A) JSON embebido: window.__additionalDataLoaded
+                                    _mj = re.search(
+                                        r'window\.__additionalDataLoaded\s*\(\s*["\']feed["\']\s*,\s*(\{.*?\})\s*\)\s*;',
+                                        _ehtml, re.DOTALL)
+                                    if _mj:
+                                        try:
+                                            _ejson = json.loads(_mj.group(1))
+                                            _eit = (_ejson.get("items") or [None])[0]
+                                            if _eit:
+                                                _ig_title = _ig_title or ((_eit.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
+                                                _ig_media.extend(_ig_parse_item(_eit))
+                                        except Exception: pass
+
+                                    # B) JSON en script type=application/json
+                                    if not _ig_media:
+                                        for _sct in re.findall(
+                                                r'<script type="application/json"[^>]*>(.*?)</script>',
+                                                _ehtml, re.DOTALL):
+                                            try:
+                                                _sj = json.loads(_sct)
+                                                _pitems = (
+                                                    (_sj.get("require") or [[],[],[],[[{}]]])[0][3][0]
+                                                    .get("__bbox", {}).get("result", {})
+                                                    .get("data", {}).get("xdt_api__v1__media__shortcode__web_info", {})
+                                                    .get("items") or []
+                                                )
+                                                if _pitems:
+                                                    _eit2 = _pitems[0]
+                                                    _ig_title = _ig_title or ((_eit2.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
+                                                    _ig_media.extend(_ig_parse_item(_eit2))
+                                                    break
+                                            except Exception: pass
+
+                                    # C) Regex CDN URLs directas en el HTML del embed
+                                    if not _ig_media:
+                                        _raw = _ehtml.replace("\\u0026", "&").replace("&amp;", "&")
+                                        _vids = re.findall(
+                                            r'(https://(?:video|scontent)[^\s"\'<>\\]+\.mp4[^\s"\'<>\\]*)',
+                                            _raw)
+                                        for _vu in _vids:
+                                            if "instagram" in _vu or "cdninstagram" in _vu or "fbcdn" in _vu:
+                                                _ig_media.append((_vu, True)); break
+                                        if not _ig_media:
+                                            _imgs = re.findall(
+                                                r'(https://scontent[^\s"\'<>\\]+\.(?:jpg|jpeg)[^\s"\'<>\\]*)',
+                                                _raw)
+                                            # Filtrar thumbnails cuadrados 640x640 y preferir más grandes
+                                            _imgs_f = [u for u in _imgs if "_s640x640" not in u and "s150x150" not in u]
+                                            if _imgs_f:
+                                                _ig_media.append((_imgs_f[0], False))
+                                            elif _imgs:
+                                                _ig_media.append((_imgs[0], False))
+
+                                    if _ig_media: break
+                                except Exception as _ee:
+                                    print(f"[Instagram/embed] {_emb_path}: {_ee}")
+                            if _ig_media: break
+
+                    # ── Intento 2: API interna ?__a=1 (JSON real, sin redirect) ─
                     if not _ig_media:
                         for _ua2 in [
                             ("Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
                              "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 Instagram/303.2.0"),
-                            ("Instagram 303.2.0 Android"),
+                            "Instagram 303.2.0 Android",
                         ]:
                             if _ig_media: break
                             _hdrs2 = {"User-Agent": _ua2, "X-IG-App-ID": "936619743392459",
@@ -1443,50 +1510,55 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                         _r2 = await _h2.get(_ep2, headers=_hdrs2)
                                     if _r2.status_code != 200: continue
                                     if "application/json" not in _r2.headers.get("content-type", ""): continue
-                                    _d2 = _r2.json()
-                                    _items2 = _d2.get("items", [])
-                                    if not _items2: continue
-                                    _it2 = _items2[0]
+                                    _it2 = (_r2.json().get("items") or [None])[0]
+                                    if not _it2: continue
                                     _ig_title = _ig_title or ((_it2.get("caption") or {}).get("text") or "")[:80].replace("\n", " ").strip()
-                                    _mt2 = _it2.get("media_type")
-                                    if _mt2 == 8:
-                                        for _cm2 in _it2.get("carousel_media", []):
-                                            if _cm2.get("media_type") == 2:
-                                                _vv2 = _cm2.get("video_versions", [])
-                                                if _vv2: _ig_media.append((_vv2[0]["url"], True))
-                                            else:
-                                                _ic2 = (_cm2.get("image_versions2") or {}).get("candidates", [])
-                                                if _ic2: _ig_media.append((_ic2[0]["url"], False))
-                                    elif _mt2 == 2:
-                                        _vv2 = _it2.get("video_versions", [])
-                                        if _vv2: _ig_media.append((_vv2[0]["url"], True))
-                                    else:
-                                        _ic2 = (_it2.get("image_versions2") or {}).get("candidates", [])
-                                        if _ic2: _ig_media.append((_ic2[0]["url"], False))
+                                    _ig_media.extend(_ig_parse_item(_it2))
                                 except Exception: pass
 
-                    # ── Intento 3: SnapInstagram API ───────────────────────────
+                    # ── Intento 3: instaloader (con cookies si existen) ────────
                     if not _ig_media:
                         try:
-                            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as _h3:
-                                _r3 = await _h3.post(
-                                    "https://v3.saveinsta.app/api/ajaxSearch",
-                                    data={"q": url, "t": "media", "lang": "en"},
-                                    headers={
-                                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                                        "X-Requested-With": "XMLHttpRequest",
-                                        "Referer": "https://saveinsta.app/",
-                                    }
-                                )
-                                _d3 = _r3.json()
-                                if _d3.get("status") == "ok":
-                                    _dat3 = _d3.get("data", {})
-                                    for _img3 in _dat3.get("images", []):
-                                        if _img3.get("url"): _ig_media.append((_img3["url"], False))
-                                    for _vid3 in _dat3.get("videos", []):
-                                        if _vid3.get("url"): _ig_media.append((_vid3["url"], True))
-                        except Exception as _se:
-                            print(f"[Instagram/snapinsta] {_se}")
+                            import instaloader as _il
+                            _L = _il.Instaloader(
+                                quiet=True, dirname_pattern="/tmp",
+                                download_pictures=False, download_videos=False,
+                                download_video_thumbnails=False,
+                                download_geotags=False, download_comments=False,
+                                save_metadata=False, compress_json=False,
+                            )
+                            _ck_p = next((p for p in ["cookies.txt", "telegram-bot/cookies.txt"]
+                                          if os.path.exists(p)), None)
+                            if _ck_p:
+                                try: _L.load_session_from_file("", _ck_p)
+                                except Exception: pass
+                            _post = await asyncio.to_thread(
+                                _il.Post.from_shortcode, _L.context, _shortcode)
+                            try: _cap = _post.caption or ""
+                            except Exception: _cap = ""
+                            _ig_title = _ig_title or _cap[:80].replace("\n", " ").strip()
+                            try: _mc = _post.mediacount
+                            except Exception: _mc = None
+                            if _mc and _mc > 1:
+                                def _get_nodes():
+                                    return list(_post.get_sidecar_nodes())
+                                for _nd in await asyncio.to_thread(_get_nodes):
+                                    try:
+                                        if _nd.is_video and _nd.video_url:
+                                            _ig_media.append((_nd.video_url, True))
+                                        elif not _nd.is_video and _nd.url:
+                                            _ig_media.append((_nd.url, False))
+                                    except Exception: pass
+                            elif _post.is_video:
+                                try:
+                                    if _post.video_url: _ig_media.append((_post.video_url, True))
+                                except Exception: pass
+                            else:
+                                try:
+                                    if _post.url: _ig_media.append((_post.url, False))
+                                except Exception: pass
+                        except Exception as _ile:
+                            print(f"[Instagram/instaloader] {type(_ile).__name__}: {_ile}")
 
                     # ── Descargar y enviar si tenemos URLs ────────────────────
                     if _ig_media:
