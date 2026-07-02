@@ -755,8 +755,15 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
 
 
 def _crunchy_cookie_path() -> str | None:
-    for p in ["crunchyroll_cookies.txt", "telegram-bot/crunchyroll_cookies.txt",
-              "cookies.txt", "telegram-bot/cookies.txt"]:
+    _bd = os.path.dirname(os.path.abspath(__file__))
+    for p in [
+        os.path.join(_bd, "crunchyroll_cookies.txt"),
+        os.path.join(_bd, "cookies.txt"),
+        "crunchyroll_cookies.txt",
+        "telegram-bot/crunchyroll_cookies.txt",
+        "cookies.txt",
+        "telegram-bot/cookies.txt",
+    ]:
         if os.path.exists(p) and os.path.getsize(p) > 0:
             return p
     return None
@@ -2899,21 +2906,31 @@ async def cmd_cookies(client: Client, message: Message):
         return
 
     # Detectar automáticamente si es para Crunchyroll
+    _bot_dir = os.path.dirname(os.path.abspath(__file__))
     if "crunchyroll" in fname_low or "crunchy" in fname_low:
-        save_path  = "crunchyroll_cookies.txt"
-        label      = "Crunchyroll cookies"
+        save_path = os.path.join(_bot_dir, "crunchyroll_cookies.txt")
+        label     = "Crunchyroll cookies"
     else:
-        save_path  = "cookies.txt"
-        label      = "Cookies generales (YouTube, Twitch, etc.)"
+        save_path = os.path.join(_bot_dir, "cookies.txt")
+        label     = "Cookies generales (YouTube, Twitch, etc.)"
 
     msg = await message.reply_text("⏳ Guardando cookies...")
     try:
-        await client.download_media(doc_msg, file_name=save_path)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        # Descargar a un temporal y luego mover para evitar paths ambiguos
+        tmp_path = save_path + ".tmp"
+        dl_result = await client.download_media(doc_msg, file_name=tmp_path)
+        # Pyrogram puede ignorar file_name y devolver el path real
+        actual = dl_result if (dl_result and os.path.exists(dl_result)) else tmp_path
+        if os.path.exists(actual):
+            os.replace(actual, save_path)
+        if not os.path.exists(save_path):
+            raise FileNotFoundError(f"No se pudo guardar en {save_path}")
         size = os.path.getsize(save_path)
         await msg.edit_text(
             f"╭─「 🍪 Cookies actualizadas ✅ 」\n"
             f"┊ 📄 Tipo    : {label}\n"
-            f"┊ 💾 Archivo : `{save_path}`\n"
+            f"┊ 💾 Archivo : `{os.path.basename(save_path)}`\n"
             f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
             f"╰─ yt-dlp las usará en la próxima descarga.\n\n"
             f"{BOT_SIGNATURE}"
@@ -2923,31 +2940,29 @@ async def cmd_cookies(client: Client, message: Message):
 
 
 # ─── GESTOR DE CREDENCIALES CRUNCHYROLL ───────────────────────────────────────
-CRUNCHY_CREDS_DIR = "creds/crunchyroll"
+_BOT_DIR = os.path.dirname(os.path.abspath(__file__))
+CRUNCHY_CREDS_DIR = os.path.join(_BOT_DIR, "creds", "crunchyroll")
 
 _CRUNCHY_FILE_MAP = {
     # extensión / nombre → (ruta destino, descripción)
-    "cookies":     ("crunchyroll_cookies.txt", "🍪 Cookies de Crunchyroll"),
-    "wvd":         (f"{CRUNCHY_CREDS_DIR}/device.wvd",   "📱 Widevine Device (.wvd)"),
-    "config":      (f"{CRUNCHY_CREDS_DIR}/mp4.config",   "⚙️ Config mp4decrypt"),
-    "cfg":         (f"{CRUNCHY_CREDS_DIR}/mp4.config",   "⚙️ Config mp4decrypt"),
-    "keys":        (f"{CRUNCHY_CREDS_DIR}/keys.txt",     "🔑 Claves de descifrado"),
-    "key":         (f"{CRUNCHY_CREDS_DIR}/keys.txt",     "🔑 Claves de descifrado"),
-    "license":     (f"{CRUNCHY_CREDS_DIR}/license.bin",  "📜 Licencia binaria"),
+    "cookies": (os.path.join(_BOT_DIR, "crunchyroll_cookies.txt"), "🍪 Cookies de Crunchyroll"),
+    "wvd":     (os.path.join(CRUNCHY_CREDS_DIR, "device.wvd"),    "📱 Widevine Device (.wvd)"),
+    "config":  (os.path.join(CRUNCHY_CREDS_DIR, "mp4.config"),    "⚙️ Config mp4decrypt"),
+    "cfg":     (os.path.join(CRUNCHY_CREDS_DIR, "mp4.config"),    "⚙️ Config mp4decrypt"),
+    "keys":    (os.path.join(CRUNCHY_CREDS_DIR, "keys.txt"),      "🔑 Claves de descifrado"),
+    "key":     (os.path.join(CRUNCHY_CREDS_DIR, "keys.txt"),      "🔑 Claves de descifrado"),
+    "license": (os.path.join(CRUNCHY_CREDS_DIR, "license.bin"),   "📜 Licencia binaria"),
 }
 
 def _crunchy_file_dest(filename: str) -> tuple[str, str]:
-    """Retorna (ruta_destino, descripción) según el nombre/extensión del archivo."""
+    """Retorna (ruta_destino absoluta, descripción) según nombre/extensión del archivo."""
     fl  = filename.lower()
     ext = fl.rsplit(".", 1)[-1] if "." in fl else ""
-
     if "cookie" in fl or "crunchy" in fl:
-        return "crunchyroll_cookies.txt", "🍪 Cookies de Crunchyroll"
+        return os.path.join(_BOT_DIR, "crunchyroll_cookies.txt"), "🍪 Cookies de Crunchyroll"
     if ext in _CRUNCHY_FILE_MAP:
-        dest, label = _CRUNCHY_FILE_MAP[ext]
-        return dest, label
-    # Cualquier otro archivo → carpeta creds/crunchyroll/ con nombre original
-    return f"{CRUNCHY_CREDS_DIR}/{filename}", f"📁 {filename}"
+        return _CRUNCHY_FILE_MAP[ext]
+    return os.path.join(CRUNCHY_CREDS_DIR, filename), f"📁 {filename}"
 
 
 @bot.on_message(filters.command(["crfiles", "crfile", "crcreds", "crcookies"]))
@@ -3008,20 +3023,24 @@ async def cmd_crfiles(client: Client, message: Message):
         return
 
     # ── Con archivo: guardar ─────────────────────────────────────────────────
-    fname     = doc_msg.document.file_name or "archivo"
+    fname       = doc_msg.document.file_name or "archivo"
     dest, label = _crunchy_file_dest(fname)
-    dest_dir  = os.path.dirname(dest)
-    if dest_dir:
-        os.makedirs(dest_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
 
     msg = await message.reply_text(f"⏳ Guardando `{fname}`...")
     try:
-        await client.download_media(doc_msg, file_name=dest)
+        tmp_dest   = dest + ".tmp"
+        dl_result  = await client.download_media(doc_msg, file_name=tmp_dest)
+        actual     = dl_result if (dl_result and os.path.exists(dl_result)) else tmp_dest
+        if os.path.exists(actual):
+            os.replace(actual, dest)
+        if not os.path.exists(dest):
+            raise FileNotFoundError(f"No se pudo guardar en {dest}")
         size = os.path.getsize(dest)
         await msg.edit_text(
             f"╭─「 🎌 Crunchyroll — Credencial guardada ✅ 」\n"
             f"┊ 🗂 Tipo    : {label}\n"
-            f"┊ 💾 Guardado: `{dest}`\n"
+            f"┊ 💾 Guardado: `{os.path.basename(dest)}`\n"
             f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
             f"╰─ Se usará automáticamente en la próxima descarga CR.\n\n"
             f"{BOT_SIGNATURE}"
