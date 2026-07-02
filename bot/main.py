@@ -68,17 +68,26 @@ def _build_fmt(h: int) -> tuple[str, str]:
         combined = "bestvideo+bestaudio/best"
         split    = "bestvideo+bestaudio/best"
     elif h == 1080:
-        combined = "bestvideo+bestaudio/best"
-        split    = ("bestvideo[height=1080][fps>=50]+bestaudio[ext=m4a]"
-                    "/bestvideo[height=1080][fps>=50]+bestaudio"
-                    "/bestvideo[height=1080]+bestaudio[ext=m4a]"
-                    "/bestvideo[height=1080]+bestaudio"
-                    "/bestvideo[height<=1080]+bestaudio"
-                    "/bestvideo+bestaudio/best")
+        # Todos los clientes apuntan a 1080p (combined NO usa "best" genérico
+        # porque YouTube lo capea en 720p en clientes móviles)
+        split = ("bestvideo[height=1080][fps>=50][ext=mp4]+bestaudio[ext=m4a]"
+                 "/bestvideo[height=1080][fps>=50]+bestaudio[ext=m4a]"
+                 "/bestvideo[height=1080][fps>=50]+bestaudio"
+                 "/bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]"
+                 "/bestvideo[height=1080]+bestaudio[ext=m4a]"
+                 "/bestvideo[height=1080]+bestaudio"
+                 "/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+                 "/bestvideo[height<=1080]+bestaudio"
+                 "/bestvideo+bestaudio/best")
+        combined = split  # igual: forzar 1080p en TODOS los clientes YT
     else:
-        combined = f"bestvideo[height<={h}]+bestaudio/best"
-        split    = (f"bestvideo[height<={h}][fps>=50]+bestaudio[ext=m4a]"
+        combined = (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+                    f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
+                    f"/bestvideo[height<={h}]+bestaudio/best")
+        split    = (f"bestvideo[height<={h}][fps>=50][ext=mp4]+bestaudio[ext=m4a]"
+                    f"/bestvideo[height<={h}][fps>=50]+bestaudio[ext=m4a]"
                     f"/bestvideo[height<={h}][fps>=50]+bestaudio"
+                    f"/bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
                     f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
                     f"/bestvideo[height<={h}]+bestaudio"
                     f"/bestvideo+bestaudio/best")
@@ -1281,7 +1290,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
 
                 last_error = None
                 if _is_youtube(url):
-                    _COMBINED_CLIENTS = {"ios", "android", "mweb", "tv_embedded"}
                     _FMT_COMBINED, _FMT_SPLIT = _build_fmt(_max_quality)
                     _UA = {
                         "ios":     "com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0",
@@ -1292,7 +1300,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     for _client in _YT_CLIENTS:
                         if _stop_evt.is_set(): raise ValueError("USER_CANCELLED")
                         opts = dict(base_opts)
-                        opts["format"] = _FMT_COMBINED if _client in _COMBINED_CLIENTS else _FMT_SPLIT
+                        # Todos los clientes usan el mismo formato 1080p explícito
+                        # (_FMT_COMBINED == _FMT_SPLIT cuando _max_quality==1080)
+                        opts["format"] = _FMT_SPLIT
+                        opts["merge_output_format"] = "mp4"
+                        opts["format_sort"] = ["res:1080", "ext:mp4:m4a", "fps", "tbr"]
                         opts["extractor_args"] = {"youtube": {"player_client": [_client],
                                                                "skip": ["translated_subs"]}}
                         if _client in _UA: opts["http_headers"] = {"User-Agent": _UA[_client]}
