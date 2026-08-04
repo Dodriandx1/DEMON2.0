@@ -1424,8 +1424,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                 # ── Primario: yt-dlp (reels, fotos y carruseles) ──────────
                 _ig_cap = {"title": ""}
                 def _run_ig_ydl():
-                    # Limpiar URL (quitar parámetros de tracking como ?igsh=...)
-                    _clean_url = re.sub(r'\?.*$', '', url.strip())
                     _ig_opts = {
                         "outtmpl":   f"{DOWNLOAD_DIR}{task_id}_%(autonumber)03d.%(ext)s",
                         "format":    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
@@ -1433,11 +1431,9 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         "playlist_items": "1-30",
                         "quiet": True, "no_warnings": True,
                         "merge_output_format": "mp4",
-                        "writethumbnail": False,
                         "concurrent_fragment_downloads": 4,
                         "retries": 5, "fragment_retries": 5,
                         "progress_hooks": [ydl_hook],
-                        "extractor_args": {"instagram": {"api": ["graphql"]}},
                         "http_headers": {
                             "User-Agent": (
                                 "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -1449,7 +1445,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     if _ig_ck:
                         _ig_opts["cookiefile"] = _ig_ck
                     with yt_dlp.YoutubeDL(_ig_opts) as _ydl:
-                        _info = _ydl.extract_info(_clean_url, download=True)
+                        _info = _ydl.extract_info(url, download=True)
                         if _info:
                             _ig_cap["title"] = (
                                 _info.get("title") or
@@ -1477,7 +1473,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     if _is_cancelled(_ie): raise ValueError("USER_CANCELLED")
                     print(f"[Instagram/yt-dlp] {type(_ie).__name__}: {_ie}")
 
-                # ── Fallback: embed scraper multi-estrategia ──────────────
+                # ── Fallback: embed scraper para fotos (si yt-dlp falló) ──
                 if not _ig_done:
                     _sc = re.search(r'/(?:p|reel|tv|reels)/([A-Za-z0-9_-]+)', url)
                     _shortcode = _sc.group(1) if _sc else None
@@ -1486,65 +1482,35 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         _fb_ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                                   "Chrome/125.0.0.0 Safari/537.36")
-                        for _emb_path in ["reel", "p"]:
-                            if _fb_media: break
+                        for _emb_path in ["p", "reel"]:
                             try:
                                 async with httpx.AsyncClient(
-                                        timeout=25, follow_redirects=True) as _he:
+                                        timeout=20, follow_redirects=True) as _he:
                                     _re = await _he.get(
                                         f"https://www.instagram.com/{_emb_path}/{_shortcode}/embed/captioned/",
                                         headers={
                                             "User-Agent": _fb_ua,
                                             "Accept": "text/html,application/xhtml+xml",
                                             "Accept-Language": "en-US,en;q=0.9",
-                                            "Sec-Fetch-Dest": "iframe",
-                                            "Sec-Fetch-Mode": "navigate",
                                         })
                                 if _re.status_code != 200: continue
-                                # Desescapar completamente (JSON usa \u0026 y \/)
-                                _raw2 = (_re.text
-                                         .replace("\\u0026", "&")
-                                         .replace("&amp;", "&")
-                                         .replace("\\/", "/"))
-
-                                # A) "video_url" en JSON embebido
-                                _vj = re.findall(r'"video_url"\s*:\s*"([^"]+)"', _raw2)
-                                if _vj:
-                                    _fb_media.append((_vj[0], True))
-
-                                # B) etiqueta <video src=...>
-                                if not _fb_media:
-                                    _vs = re.findall(
-                                        r'<video[^>]+src=["\']([^"\']+\.mp4[^"\']*)["\']',
-                                        _raw2, re.IGNORECASE)
-                                    if _vs: _fb_media.append((_vs[0], True))
-
-                                # C) Cualquier .mp4 del CDN de Meta/Instagram
-                                if not _fb_media:
-                                    for _mp in re.findall(
-                                            r'(https://[^\s"\'<>]+\.mp4[^\s"\'<>]*)',
-                                            _raw2):
-                                        if any(d in _mp for d in
-                                               ["cdninstagram", "fbcdn", "scontent"]):
-                                            _fb_media.append((_mp, True)); break
-
-                                # D) "display_url" (imagen full-res del JSON)
-                                if not _fb_media:
-                                    _dj = re.findall(r'"display_url"\s*:\s*"([^"]+)"', _raw2)
-                                    for _du in _dj:
-                                        if "_s640x640" not in _du and "s150x150" not in _du:
-                                            _fb_media.append((_du, False)); break
-
-                                # E) scontent*.jpg — imagen sin recortar
+                                _raw2 = _re.text.replace("\\u0026", "&").replace("&amp;", "&")
+                                # Buscar vídeos del CDN
+                                for _vu in re.findall(
+                                        r'(https://(?:video|scontent)[^\s"\'<>\\]+\.mp4[^\s"\'<>\\]*)',
+                                        _raw2):
+                                    if "cdninstagram" in _vu or "fbcdn" in _vu:
+                                        _fb_media.append((_vu, True)); break
+                                # Buscar imágenes (descartar thumbnails 640x640)
                                 if not _fb_media:
                                     _imgs = re.findall(
-                                        r'(https://scontent[^\s"\'<>]+\.(?:jpg|jpeg)[^\s"\'<>]*)',
+                                        r'(https://scontent[^\s"\'<>\\]+\.(?:jpg|jpeg)[^\s"\'<>\\]*)',
                                         _raw2)
                                     _imgs_ok = [u for u in _imgs
                                                 if "_s640x640" not in u and "s150x150" not in u]
                                     if _imgs_ok: _fb_media.append((_imgs_ok[0], False))
                                     elif _imgs:  _fb_media.append((_imgs[0],    False))
-
+                                if _fb_media: break
                             except Exception as _ee:
                                 print(f"[Instagram/embed] {_emb_path}: {_ee}")
 
