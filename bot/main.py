@@ -61,37 +61,28 @@ download_queue: asyncio.Queue = asyncio.Queue()
 _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 
 # Calidad máxima de descarga (modificable con /quality)
-_max_quality = 1080
+# 0 = sin límite (mejor disponible, hasta 4K/8K)
+_max_quality = 0
 
 def _build_fmt(h: int) -> tuple[str, str]:
+    """
+    Retorna (combined_fmt, split_fmt) para yt-dlp.
+    h=0  → sin límite, máxima calidad disponible (4K/8K).
+    h>0  → máximo h píxeles de alto.
+    """
     if h == 0:  # sin límite
-        combined = "bestvideo+bestaudio/best"
-        split    = "bestvideo+bestaudio/best"
-    elif h == 1080:
-        # Todos los clientes apuntan a 1080p (combined NO usa "best" genérico
-        # porque YouTube lo capea en 720p en clientes móviles)
-        split = ("bestvideo[height=1080][fps>=50][ext=mp4]+bestaudio[ext=m4a]"
-                 "/bestvideo[height=1080][fps>=50]+bestaudio[ext=m4a]"
-                 "/bestvideo[height=1080][fps>=50]+bestaudio"
-                 "/bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]"
-                 "/bestvideo[height=1080]+bestaudio[ext=m4a]"
-                 "/bestvideo[height=1080]+bestaudio"
-                 "/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
-                 "/bestvideo[height<=1080]+bestaudio"
-                 "/bestvideo+bestaudio/best")
-        combined = split  # igual: forzar 1080p en TODOS los clientes YT
+        fmt = ("bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+               "/bestvideo+bestaudio[ext=m4a]"
+               "/bestvideo[ext=mp4]+bestaudio"
+               "/bestvideo+bestaudio/best")
+        return fmt, fmt
     else:
-        combined = (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}]+bestaudio/best")
-        split    = (f"bestvideo[height<={h}][fps>=50][ext=mp4]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}][fps>=50]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}][fps>=50]+bestaudio"
-                    f"/bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
-                    f"/bestvideo[height<={h}]+bestaudio"
-                    f"/bestvideo+bestaudio/best")
-    return combined, split
+        fmt = (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+               f"/bestvideo[height<={h}]+bestaudio[ext=m4a]"
+               f"/bestvideo[height<={h}][ext=mp4]+bestaudio"
+               f"/bestvideo[height<={h}]+bestaudio"
+               f"/bestvideo+bestaudio/best")
+        return fmt, fmt
 
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
 
@@ -1222,7 +1213,9 @@ async def procesar_descarga(client: Client, message: Message, url: str,
             start_t = time.time()
             loop    = asyncio.get_running_loop()
             captured = {"title": ""}
-            _YT_CLIENTS = ["ios", "android", "web_creator", "mweb", "tv_embedded", "web"]
+            # web_creator y tv_embedded sirven DASH completo (4K/8K)
+            # ios/android se usan como respaldo si los anteriores son bloqueados
+            _YT_CLIENTS = ["web_creator", "tv_embedded", "web", "ios", "android", "mweb"]
 
             def ydl_hook(d):
                 if _stop_evt.is_set() or active_tasks.get(task_id) == "CANCELLED":
@@ -1307,11 +1300,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     for _client in _YT_CLIENTS:
                         if _stop_evt.is_set(): raise ValueError("USER_CANCELLED")
                         opts = dict(base_opts)
-                        # Todos los clientes usan el mismo formato 1080p explícito
-                        # (_FMT_COMBINED == _FMT_SPLIT cuando _max_quality==1080)
                         opts["format"] = _FMT_SPLIT
                         opts["merge_output_format"] = "mp4"
-                        opts["format_sort"] = ["res:1080", "ext:mp4:m4a", "fps", "tbr"]
+                        # "res" ordena de MAYOR a MENOR resolución (4K > 1080p > 720p …)
+                        opts["format_sort"] = ["res", "fps", "vcodec:vp9.2:vp9:h265:h264",
+                                               "ext:mp4:m4a", "tbr", "asr"]
                         opts["extractor_args"] = {"youtube": {"player_client": [_client],
                                                                "skip": ["translated_subs"]}}
                         if _client in _UA: opts["http_headers"] = {"User-Agent": _UA[_client]}
