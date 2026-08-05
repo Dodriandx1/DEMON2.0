@@ -2398,40 +2398,245 @@ async def queue_worker():
         finally:
             download_queue.task_done()
 
+# ─── MÚSICA: BÚSQUEDA Y DESCARGA ──────────────────────────────────────────────
+_music_searches: dict[str, list] = {}   # key=f"{uid}_{msg_id}" → lista de hits
+
+async def _yt_search(query: str, n: int = 5) -> list[dict]:
+    """Busca en YouTube y retorna hasta n resultados (sin descargar)."""
+    def _do():
+        opts = {"quiet": True, "no_warnings": True,
+                "extract_flat": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{n}:{query}", download=False)
+            if not info or "entries" not in info:
+                return []
+            return [
+                {
+                    "id":       e.get("id", ""),
+                    "title":    (e.get("title") or "Sin título")[:80],
+                    "uploader": (e.get("uploader") or e.get("channel") or "?")[:40],
+                    "duration": e.get("duration") or 0,
+                    "url":      f"https://www.youtube.com/watch?v={e.get('id', '')}",
+                }
+                for e in (info.get("entries") or [])
+                if e and e.get("id")
+            ]
+    return await asyncio.to_thread(_do)
+
+def _fmt_dur(secs) -> str:
+    """Formatea segundos → mm:ss o hh:mm:ss."""
+    if not secs: return "?:??"
+    secs = int(secs)
+    h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
+    return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
+
+
 # ─── CLIENTE BOT ──────────────────────────────────────────────────────────────
 bot = Client("bot_session", api_id=API_ID, api_hash=API_HASH,
              bot_token=BOT_TOKEN, workdir="/tmp")
 
 # ─── COMANDOS ─────────────────────────────────────────────────────────────────
+
+# ── Música: /play, /playv, /search ──────────────────────────────────────────
+@bot.on_message(filters.command(["play", "Play"]))
+async def cmd_play(client: Client, message: Message):
+    """/play <canción/artista> — Descarga el primer resultado de YouTube como MP3."""
+    if not is_auth(message.from_user.id): return
+    uid   = message.from_user.id
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            f"╭─ 🎵 /play — Descargar canción como MP3\n┊\n"
+            f"┊ Uso: /play <nombre canción o artista>\n┊\n"
+            f"┊ Ejemplos:\n"
+            f"┊   /play Blinding Lights\n"
+            f"┊   /play Michael Jackson Beat It\n"
+            f"┊   /play Shakira Waka Waka\n┊\n"
+            f"╰─ Descarga el top resultado de YouTube como MP3\n\n{BOT_SIGNATURE}"
+        )
+        return
+    query   = parts[1].strip()
+    task_id = f"{uid}_{int(time.time())}"
+    msg     = await message.reply_text(
+        f"╭ Task By → 「{uname}」\n"
+        f"┊ 🔍 Buscando: <b>{query[:50]}</b>...\n"
+        f"╰ Mode     : #MusicPlay\n\n{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML
+    )
+    hits = await _yt_search(query, n=1)
+    if not hits:
+        await msg.edit_text(
+            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
+            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        return
+    await msg.delete()
+    asyncio.create_task(procesar_audio(client, message, hits[0]["url"], uname, task_id))
+
+
+@bot.on_message(filters.command(["playv", "Playv", "playvideo", "pv"]))
+async def cmd_playv(client: Client, message: Message):
+    """/playv <canción/artista> — Descarga el primer resultado como video MP4."""
+    if not is_auth(message.from_user.id): return
+    uid   = message.from_user.id
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            f"╭─ 🎬 /playv — Descargar video de canción\n┊\n"
+            f"┊ Uso: /playv <nombre canción o artista>\n┊\n"
+            f"┊ Ejemplos:\n"
+            f"┊   /playv Bohemian Rhapsody\n"
+            f"┊   /playv Bad Bunny Tití Me Preguntó\n┊\n"
+            f"╰─ Descarga el top resultado de YouTube como video\n\n{BOT_SIGNATURE}"
+        )
+        return
+    query   = parts[1].strip()
+    task_id = f"{uid}_{int(time.time())}"
+    msg     = await message.reply_text(
+        f"╭ Task By → 「{uname}」\n"
+        f"┊ 🔍 Buscando: <b>{query[:50]}</b>...\n"
+        f"╰ Mode     : #MusicVideo\n\n{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML
+    )
+    hits = await _yt_search(query, n=1)
+    if not hits:
+        await msg.edit_text(
+            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
+            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        return
+    await msg.delete()
+    queue_label = f"Cola #{download_queue.qsize() + 1}"
+    await download_queue.put((client, message, hits[0]["url"], uname, uid, queue_label, False))
+
+
+@bot.on_message(filters.command(["search", "buscar", "musica", "música", "sm"]))
+async def cmd_search(client: Client, message: Message):
+    """/search <query> — Busca en YouTube y muestra 5 resultados con botones."""
+    if not is_auth(message.from_user.id): return
+    uid   = message.from_user.id
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            f"╭─ 🔍 /search — Buscar música en YouTube\n┊\n"
+            f"┊ Uso: /search <nombre canción o artista>\n┊\n"
+            f"┊ Ejemplos:\n"
+            f"┊   /search Shakira\n"
+            f"┊   /search Despacito Luis Fonsi\n┊\n"
+            f"┊ Muestra 5 resultados con botones:\n"
+            f"┊   🎵 = descargar MP3\n"
+            f"┊   🎬 = descargar video\n"
+            f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
+        )
+        return
+    query = parts[1].strip()
+    msg   = await message.reply_text(
+        f"╭ Task By → 「{uname}」\n"
+        f"┊ 🔍 Buscando: <b>{query[:50]}</b>...\n"
+        f"╰ Mode     : #MusicSearch\n\n{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML
+    )
+    hits = await _yt_search(query, n=5)
+    if not hits:
+        await msg.edit_text(
+            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
+            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        return
+
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    search_key = f"{uid}_{msg.id}"
+    _music_searches[search_key] = hits
+
+    rows = []
+    for i, h in enumerate(hits):
+        num = i + 1
+        rows.append([
+            InlineKeyboardButton(f"🎵 {num}", callback_data=f"mplay:{search_key}:{i}:a"),
+            InlineKeyboardButton(f"🎬 {num}", callback_data=f"mplay:{search_key}:{i}:v"),
+        ])
+
+    lines = [f"╭─ 🔍 Resultados para: <b>{query[:50]}</b>\n┊"]
+    for i, h in enumerate(hits, 1):
+        dur = _fmt_dur(h["duration"])
+        lines.append(f"┊ <b>{i}.</b> {h['title'][:55]}")
+        lines.append(f"┊    👤 {h['uploader'][:35]}  ⏱ {dur}")
+        if i < len(hits): lines.append("┊")
+    lines.append(f"┊\n┊ 🎵 = MP3    🎬 = Video")
+    lines.append(f"╰─────────────────────────\n\n{BOT_SIGNATURE}")
+
+    await msg.edit_text(
+        "\n".join(lines),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+
+@bot.on_callback_query(filters.regex(r"^mplay:(.+):(\d+):(a|v)$"))
+async def cb_music_play(client: Client, cb: CallbackQuery):
+    """Callback al pulsar 🎵 o 🎬 en /search."""
+    if not is_auth(cb.from_user.id):
+        await cb.answer("⛔ No autorizado.", show_alert=True); return
+    uid        = cb.from_user.id
+    uname      = cb.from_user.username or cb.from_user.first_name or str(uid)
+    search_key = cb.matches[0].group(1)
+    idx        = int(cb.matches[0].group(2))
+    mode       = cb.matches[0].group(3)
+    hits       = _music_searches.get(search_key)
+    if not hits or idx >= len(hits):
+        await cb.answer("❌ Los resultados expiraron. Usa /search de nuevo.", show_alert=True)
+        return
+    hit     = hits[idx]
+    url     = hit["url"]
+    title   = hit["title"]
+    task_id = f"{uid}_{int(time.time())}"
+    icon    = "🎵" if mode == "a" else "🎬"
+    await cb.answer(f"{icon} Descargando: {title[:40]}", show_alert=False)
+    try: await cb.message.delete()
+    except Exception: pass
+    ref = cb.message
+    if mode == "a":
+        asyncio.create_task(procesar_audio(client, ref, url, uname, task_id))
+    else:
+        queue_label = f"Cola #{download_queue.qsize() + 1}"
+        await download_queue.put((client, ref, url, uname, uid, queue_label, False))
+
+
 @bot.on_message(filters.command("coms"))
 async def cmd_coms(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
     await message.reply_text(
-        "📋 Comandos disponibles:\n\n"
-        "🔓 Usuarios autorizados:\n"
-        "• Envía un link para descargar\n"
-        "• Envía un video para agregar marca de agua\n"
-        "• /start — Iniciar el bot\n"
+        "📋 <b>Comandos disponibles</b>\n\n"
+        "🎵 <b>Música (sin necesidad de link):</b>\n"
+        "• /play &lt;canción/artista&gt; — Busca y descarga MP3 del top resultado\n"
+        "• /playv &lt;canción/artista&gt; — Busca y descarga el video del top resultado\n"
+        "• /search &lt;canción/artista&gt; — Muestra 5 resultados con botones\n"
+        "    🎵 = descargar MP3   🎬 = descargar video\n\n"
+        "🔗 <b>Descarga por link:</b>\n"
+        "• Envía cualquier link — YouTube, TikTok, Instagram, etc.\n"
+        "• /audio &lt;link&gt; — Extraer y descargar audio MP3\n"
+        "• /playlist &lt;link&gt; — Descargar playlist completa como MP3\n\n"
+        "🛠 <b>Herramientas:</b>\n"
+        "• /encode &lt;magnet&gt; — Descargar torrent y convertir a MP4\n"
+        "• /quality — Cambiar calidad de descarga (4K/1080p/720p/480p)\n"
+        "• /queue — Ver cola de descargas activa\n"
+        "• /cancel — Cancelar descarga activa\n"
         "• /ping — Ver latencia\n"
-        "• /queue — Ver cola de descargas\n"
-        "• /audio <link> — Descargar audio MP3\n"
-        "• /playlist <link> — Descargar playlist completa\n"
-        "• /encode <magnet> — Descargar torrent y convertir a MP4\n"
-        "• /cancel — Cancelar descarga activa\n\n"
-        "🔐 Solo administradores:\n"
+        "• /start — Bienvenida del bot\n\n"
+        "🔐 <b>Solo administradores:</b>\n"
         "• /id — Autorizar usuario (responde su mensaje)\n"
-        "• /addid <ID> — Autorizar usuario por ID directo\n"
-        "• /rmid <ID> — Quitar autorización por ID\n"
+        "• /addid &lt;ID&gt; — Autorizar usuario por ID directo\n"
+        "• /rmid &lt;ID&gt; — Quitar autorización por ID\n"
         "• /users — Ver usuarios autorizados\n"
         "• /stat — Ver estadísticas del servidor\n"
         "• /reset — Cancelar todo y limpiar\n"
-        "• /quality — Cambiar calidad de descarga (4K/1080p/720p/480p)\n"
         "• /admin — Dar rango admin\n"
         "• /remadmin — Quitar rango admin\n"
         "• /cancelarID — Quitar autorización (responde su mensaje)\n"
         "• /getcode — Obtener código fuente en .txt\n"
         "• /coms — Ver esta lista\n\n"
-        f"{BOT_SIGNATURE}"
+        f"{BOT_SIGNATURE}",
+        parse_mode=enums.ParseMode.HTML
     )
 
 @bot.on_message(filters.command("start"))
@@ -3248,7 +3453,10 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "wm_cancel", "audio", "Audio", "mp3", "ping", "Ping",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
                  "encode", "Encode", "torrent", "cookies",
-                 "crfiles", "crfile", "crcreds", "crcookies"]
+                 "crfiles", "crfile", "crcreds", "crcookies",
+                 # Música
+                 "play", "Play", "playv", "Playv", "playvideo", "pv",
+                 "search", "buscar", "musica", "música", "sm"]
 
 @bot.on_message(
     filters.text
