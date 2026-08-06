@@ -168,6 +168,8 @@ def get_platform_icon(url: str) -> str:
     if "facebook.com" in u or "fb.com" in u:   return "📘"
     if "reddit.com" in u:                       return "🤖"
     if "mega.nz" in u:                          return "☁️"
+    if "drive.google.com" in u or "docs.google.com" in u: return "📄"
+    if u.split("?")[0].endswith(".pdf"):        return "📕"
     if "mediafire.com" in u:                    return "🗂️"
     if "spotify.com" in u:                      return "🎧"
     if "soundcloud.com" in u:                   return "🎶"
@@ -990,6 +992,8 @@ async def procesar_descarga(client: Client, message: Message, url: str,
     is_soundcloud     = "soundcloud.com" in url.lower()
     is_video_host     = any(h in url.lower() for h in VIDEO_HOSTS)
     is_direct_img     = any(url.lower().split("?")[0].endswith(ext) for ext in IMAGE_EXTS)
+    is_direct_pdf     = _is_pdf_url(url)
+    is_gdrive         = _is_gdrive_url(url)
     _CAROUSEL_DOMAINS = ("instagram.com", "twitter.com", "x.com", "facebook.com",
                          "fb.com", "reddit.com", "tumblr.com", "threads.net",
                          "pinterest.com", "snapchat.com")
@@ -2110,6 +2114,221 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
             try: os.remove(f)
             except: pass
 
+# ─── PDF / DOCUMENTOS ─────────────────────────────────────────────────────────
+
+def _parse_gdrive_id(url: str) -> str | None:
+    """Extrae el file-ID de un link de Google Drive en cualquier formato."""
+    for pat in [
+        r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)",
+        r"drive\.google\.com/uc\?(?:.*&)?id=([a-zA-Z0-9_-]+)",
+        r"docs\.google\.com/(?:document|spreadsheets|presentation)/d/([a-zA-Z0-9_-]+)",
+    ]:
+        m = re.search(pat, url)
+        if m: return m.group(1)
+    return None
+
+def _is_pdf_url(url: str) -> bool:
+    """True si la URL apunta directamente a un PDF."""
+    return url.lower().split("?")[0].endswith(".pdf")
+
+def _is_gdrive_url(url: str) -> bool:
+    return "drive.google.com" in url.lower() or "docs.google.com" in url.lower()
+
+async def procesar_pdf(client: Client, message: Message, url: str,
+                       uname: str, uid: int, queue_label: str = ""):
+    """Descarga y envía un PDF/documento preservando calidad y orden de páginas."""
+    task_id = f"{uid}_{int(time.time())}"
+    active_tasks[task_id] = "RUNNING"
+    _current = asyncio.current_task()
+    if _current: _task_handles[task_id] = _current
+
+    is_mega   = "mega.nz" in url
+    is_mf     = "mediafire.com" in url
+    is_gdrive = _is_gdrive_url(url)
+
+    icon = get_platform_icon(url)
+    msg = await message.reply_text(
+        f"╭ Task By → 「{uname}」\n"
+        f"┊ [{make_bar(0)}] 0.00%\n"
+        f"┊ Status   : Analizando enlace...\n"
+        f"╰ Mode     : #PDFMode\n\n{BOT_SIGNATURE}"
+    )
+
+    path       = None
+    file_title = ""
+    start_t    = time.time()
+
+    try:
+        # ── MEGA ──────────────────────────────────────────────────────────────
+        if is_mega:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
+                f"┊ Status   : Conectando a MEGA...\n"
+                f"╰ Mode     : #MEGA-PDF\n\n{BOT_SIGNATURE}")
+            async def _mprog(c, t):
+                await download_progress(c, t, msg, start_t, uname, task_id, "MEGA", "#MEGA-PDF")
+            path, file_title = await mega_download(url, DOWNLOAD_DIR, task_id, progress_cb=_mprog)
+
+        # ── GOOGLE DRIVE ──────────────────────────────────────────────────────
+        elif is_gdrive:
+            fid = _parse_gdrive_id(url)
+            if not fid:
+                raise ValueError("No se pudo extraer el ID del archivo de Google Drive.")
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
+                f"┊ Status   : Conectando a Google Drive...\n"
+                f"╰ Mode     : #GDrive-PDF\n\n{BOT_SIGNATURE}")
+            # Google Drive direct-download URL (bypasses preview page)
+            dl_url = f"https://drive.usercontent.google.com/download?id={fid}&export=download&confirm=t"
+            async with httpx.AsyncClient(
+                timeout=None, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0"}
+            ) as h:
+                async with h.stream("GET", dl_url) as resp:
+                    resp.raise_for_status()
+                    # Intentar obtener nombre de Content-Disposition
+                    cd = resp.headers.get("content-disposition", "")
+                    fn_match = re.search(r'filename[*]?=["\']?(?:UTF-8\'\')?([^"\';\r\n]+)', cd, re.IGNORECASE)
+                    filename = fn_match.group(1).strip().strip('"\'') if fn_match else f"gdrive_{fid}.pdf"
+                    filename = re.sub(r'[\\/:*?"<>|]', "_", filename)
+                    path = os.path.join(DOWNLOAD_DIR, f"{task_id}_{filename}")
+                    file_title = os.path.splitext(filename)[0]
+                    total = int(resp.headers.get("content-length", 0))
+                    curr  = 0
+                    with open(path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=4 * 1024 * 1024):
+                            await asyncio.sleep(0)
+                            if active_tasks.get(task_id) == "CANCELLED":
+                                raise asyncio.CancelledError("USER_CANCELLED")
+                            f.write(chunk)
+                            curr += len(chunk)
+                            await download_progress(curr, total, msg, start_t, uname, task_id, "GDrive", "#GDrive-PDF")
+
+        # ── MEDIAFIRE ─────────────────────────────────────────────────────────
+        elif is_mf:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
+                f"┊ Status   : Conectando a MediaFire...\n"
+                f"╰ Mode     : #MF-PDF\n\n{BOT_SIGNATURE}")
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as h:
+                r    = await h.get(url)
+                soup = BeautifulSoup(r.text, "html.parser")
+                btn  = soup.find("a", {"id": "downloadButton"})
+                if not btn: raise Exception("MediaFire: botón de descarga no encontrado.")
+                dl_link  = btn.get("href")
+                filename = dl_link.split("/")[-1].split("?")[0]
+                path     = os.path.join(DOWNLOAD_DIR, f"{task_id}_{filename}")
+                file_title = os.path.splitext(filename)[0]
+                async with h.stream("GET", dl_link) as resp:
+                    total = int(resp.headers.get("content-length", 0))
+                    curr  = 0
+                    with open(path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=4 * 1024 * 1024):
+                            await asyncio.sleep(0)
+                            if active_tasks.get(task_id) == "CANCELLED":
+                                raise asyncio.CancelledError("USER_CANCELLED")
+                            f.write(chunk)
+                            curr += len(chunk)
+                            await download_progress(curr, total, msg, start_t, uname, task_id, "MF", "#MF-PDF")
+
+        # ── ENLACE DIRECTO (HTTP/S) ───────────────────────────────────────────
+        else:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
+                f"┊ Status   : Descargando documento...\n"
+                f"╰ Mode     : #DirectPDF\n\n{BOT_SIGNATURE}")
+            async with httpx.AsyncClient(
+                timeout=None, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0"}
+            ) as h:
+                async with h.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    # Verificar que sea PDF/documento
+                    ct = resp.headers.get("content-type", "").lower()
+                    if "text/html" in ct and not _is_pdf_url(url):
+                        raise Exception(
+                            "El enlace no apunta directamente a un archivo descargable.\n"
+                            "Usa /pdf con un link directo al archivo (que termine en .pdf o similar).")
+                    cd = resp.headers.get("content-disposition", "")
+                    fn_match = re.search(r'filename[*]?=["\']?(?:UTF-8\'\')?([^"\';\r\n]+)', cd, re.IGNORECASE)
+                    if fn_match:
+                        filename = fn_match.group(1).strip().strip('"\'')
+                    else:
+                        filename = url.split("/")[-1].split("?")[0]
+                        if not filename or "." not in filename: filename = "documento.pdf"
+                    filename = re.sub(r'[\\/:*?"<>|]', "_", filename)
+                    path = os.path.join(DOWNLOAD_DIR, f"{task_id}_{filename}")
+                    file_title = os.path.splitext(filename)[0]
+                    total = int(resp.headers.get("content-length", 0))
+                    curr  = 0
+                    with open(path, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=4 * 1024 * 1024):
+                            await asyncio.sleep(0)
+                            if active_tasks.get(task_id) == "CANCELLED":
+                                raise asyncio.CancelledError("USER_CANCELLED")
+                            f.write(chunk)
+                            curr += len(chunk)
+                            await download_progress(curr, total, msg, start_t, uname, task_id, "HTTP", "#DirectPDF")
+
+        # ── ENVIAR COMO DOCUMENTO (sin compresión, sin conversión) ────────────
+        if not path or not os.path.exists(path):
+            raise Exception("El archivo no se descargó correctamente.")
+
+        size_mb  = os.path.getsize(path) / (1024 * 1024)
+        fname    = os.path.basename(path)
+        display  = file_title or os.path.splitext(fname)[0]
+        ext      = os.path.splitext(fname)[1].lower()
+        doc_icon = "📕" if ext == ".pdf" else "📄"
+        caption  = (
+            f"{doc_icon} <b>{display[:100]}</b>\n\n"
+            f"📦 Tamaño: {size_mb:.1f} MB\n\n{BOT_SIGNATURE}"
+        )
+        await safe_edit(msg,
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ [{make_bar(100)}] 100%\n"
+            f"┊ Status   : ⬆️ Subiendo archivo...\n"
+            f"╰ Mode     : #PDFMode\n\n{BOT_SIGNATURE}")
+        elapsed = time.time() - start_t
+        await client.send_document(
+            chat_id=message.chat.id,
+            document=path,
+            file_name=fname,          # preserva nombre original
+            caption=caption,
+            parse_mode=enums.ParseMode.HTML,
+            progress=upload_progress,
+            progress_args=(msg, start_t, uname, task_id),
+        )
+        _stats["downloads"] += 1
+        try: _stats["bytes"] += os.path.getsize(path)
+        except: pass
+        await safe_edit(msg,
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ {doc_icon} {display[:60]}\n"
+            f"┊ ✅ Enviado ({size_mb:.1f} MB)\n"
+            f"╰ Mode     : #PDFMode\n\n{BOT_SIGNATURE}")
+        await asyncio.sleep(4)
+        try: await msg.delete()
+        except: pass
+
+    except (Exception, asyncio.CancelledError) as e:
+        is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else:         _stats["fallidos"]   += 1
+        err = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:300]}"
+        try:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ {err}\n"
+                f"╰──────────────\n\n{BOT_SIGNATURE}")
+        except: pass
+    finally:
+        active_tasks.pop(task_id, None)
+        _task_handles.pop(task_id, None)
+        if path and os.path.exists(path):
+            try: os.remove(path)
+            except: pass
+
+
 # ─── TORRENT ──────────────────────────────────────────────────────────────────
 _TORRENT_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".ts", ".m2ts", ".wmv", ".flv", ".webm"}
 
@@ -2572,6 +2791,32 @@ async def cmd_search(client: Client, message: Message):
     )
 
 
+@bot.on_message(filters.command(["pdf", "doc", "gdrive"]))
+async def cmd_pdf(client: Client, message: Message):
+    """/pdf <url> — Descarga y envía cualquier PDF/documento sin pérdida de calidad."""
+    if not is_auth(message.from_user.id): return
+    uid   = message.from_user.id
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().startswith("http"):
+        await message.reply_text(
+            f"╭─ 📕 /pdf — Descargar PDF o documento\n┊\n"
+            f"┊ Uso: /pdf <url del archivo>\n┊\n"
+            f"┊ Soporta:\n"
+            f"┊   • Links directos (.pdf, .epub, .cbr, etc.)\n"
+            f"┊   • Google Drive (drive.google.com/...)\n"
+            f"┊   • MEGA (mega.nz/file/...)\n"
+            f"┊   • MediaFire (mediafire.com/...)\n┊\n"
+            f"┊ 💡 También puedes enviar el link directo\n"
+            f"┊    sin comando — si termina en .pdf se\n"
+            f"┊    descargará automáticamente.\n"
+            f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
+        )
+        return
+    url = parts[1].strip()
+    asyncio.create_task(procesar_pdf(client, message, url, uname, uid))
+
+
 @bot.on_callback_query(filters.regex(r"^mplay:(.+):(\d+):(a|v)$"))
 async def cb_music_play(client: Client, cb: CallbackQuery):
     """Callback al pulsar 🎵 o 🎬 en /search."""
@@ -2612,6 +2857,11 @@ async def cmd_coms(client: Client, message: Message):
         "• /playv &lt;canción/artista&gt; — Busca y descarga el video del top resultado\n"
         "• /search &lt;canción/artista&gt; — Muestra 5 resultados con botones\n"
         "    🎵 = descargar MP3   🎬 = descargar video\n\n"
+        "📕 <b>PDF y documentos:</b>\n"
+        "• /pdf &lt;url&gt; — Descarga PDF sin pérdida de calidad\n"
+        "    Soporta: links directos (.pdf), Google Drive,\n"
+        "    MEGA y MediaFire\n"
+        "• Envía un link .pdf directamente — se descarga solo\n\n"
         "🔗 <b>Descarga por link:</b>\n"
         "• Envía cualquier link — YouTube, TikTok, Instagram, etc.\n"
         "• /audio &lt;link&gt; — Extraer y descargar audio MP3\n"
@@ -3456,7 +3706,9 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "crfiles", "crfile", "crcreds", "crcookies",
                  # Música
                  "play", "Play", "playv", "Playv", "playvideo", "pv",
-                 "search", "buscar", "musica", "música", "sm"]
+                 "search", "buscar", "musica", "música", "sm",
+                 # PDF / documentos
+                 "pdf", "doc", "gdrive"]
 
 @bot.on_message(
     filters.text
@@ -3509,6 +3761,9 @@ async def handle_text_input(client: Client, message: Message):
         label = f"Cola: {i}/{len(urls)}"
         if "crunchyroll.com" in url.lower():
             asyncio.create_task(procesar_crunchyroll(client, message, url, uname, uid, want_subs))
+        elif _is_pdf_url(url) or _is_gdrive_url(url):
+            # PDFs y Google Drive: bypass de cola → procesar_pdf directo
+            asyncio.create_task(procesar_pdf(client, message, url, uname, uid, label))
         else:
             await download_queue.put((client, message, url, uname, uid, label, want_subs))
             queued += 1
