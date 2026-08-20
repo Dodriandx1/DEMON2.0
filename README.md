@@ -1,6 +1,31 @@
 # Telegram Downloader Bot
 
-## Ejecutar en Contabo o Hostinger (VPS)
+## Ejecutar como Worker en Contabo o Hostinger (VPS)
+
+Este bot es un proceso persistente de Telegram. En un VPS debe crearse como
+**Worker**, **Background Process** o **Supervisor Process**, no como sitio web.
+No necesita dominio, servidor web ni puerto público.
+
+Comando de inicio del Worker:
+
+```bash
+python -u bot/main.py
+```
+
+Variables recomendadas para un Worker:
+
+```text
+KEEP_ALIVE=false
+```
+
+`KEEP_ALIVE=false` evita abrir el puerto HTTP que solo es útil para previews de
+Replit. El bot seguirá funcionando normalmente porque Telegram usa su conexión
+de red saliente.
+
+### Opción Docker Worker
+
+El `docker-compose.yml` incluido ya configura `KEEP_ALIVE=false` y reinicia el
+contenedor automáticamente:
 
 1. Instala Docker y Docker Compose en el VPS.
 2. Clona el repositorio:
@@ -22,7 +47,7 @@
    ```
 
    No subas `.env` ni `data/cookies.txt` a GitHub.
-5. Arranca el contenedor:
+5. Arranca el Worker:
 
    ```bash
    docker compose up -d --build

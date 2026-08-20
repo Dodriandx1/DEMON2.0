@@ -8,6 +8,7 @@ services:
       # Persistent authorization/session/cookies live outside the image.
       AUTH_FILE: /app/data/authorized_users.json
       YOUTUBE_COOKIES_PATH: /app/data/cookies.txt
+      KEEP_ALIVE: "false"
     volumes:
       - bot-data:/app/data
     ports:

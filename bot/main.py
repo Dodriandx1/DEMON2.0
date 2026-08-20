@@ -157,7 +157,7 @@ def is_admin(uid: int) -> bool:
     user_data = authorized_users.get(str(uid))
     return bool(user_data and user_data.get("role") == "admin")
 
-# ─── KEEP-ALIVE ───────────────────────────────────────────────────────────────
+# ─── KEEP-ALIVE / WORKER ───────────────────────────────────────────────────────
 def keep_alive():
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -172,7 +172,11 @@ def keep_alive():
     with socketserver.TCPServer(("", port), Handler) as httpd:
         httpd.serve_forever()
 
-threading.Thread(target=keep_alive, daemon=True).start()
+_keep_alive_enabled = os.environ.get("KEEP_ALIVE", "true").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+if _keep_alive_enabled:
+    threading.Thread(target=keep_alive, daemon=True).start()
 
 # ─── UTILIDADES ───────────────────────────────────────────────────────────────
 def get_readable_size(size) -> str:
