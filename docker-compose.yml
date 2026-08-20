@@ -1,0 +1,18 @@
+services:
+  telegram-bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Persistent authorization/session/cookies live outside the image.
+      AUTH_FILE: /app/data/authorized_users.json
+      YOUTUBE_COOKIES_PATH: /app/data/cookies.txt
+    volumes:
+      - bot-data:/app/data
+    ports:
+      - "8000:8000"
+    init: true
+
+volumes:
+  bot-data:

@@ -47,3 +47,12 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Runtime secrets and persistent bot state
+.env
+data/
+cookies.txt
+bot/cookies.txt
+bot/crunchyroll_cookies.txt
+*.session
+*.session-journal

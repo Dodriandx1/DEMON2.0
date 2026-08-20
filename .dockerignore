@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+cookies.txt
+bot/cookies.txt
+bot/crunchyroll_cookies.txt
+*.session
+*.session-journal
+__pycache__
+*.pyc
+attached_assets
+node_modules
+.pythonlibs
+tmp

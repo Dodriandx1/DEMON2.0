@@ -16,6 +16,7 @@ import json
 import struct
 import base64
 import platform
+import shutil
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters, enums
@@ -35,6 +36,11 @@ MEGA_PASSWORD = os.environ.get("MEGA_PASSWORD", "")
 SOCIAL_USERNAME = os.environ.get("SOCIAL_USERNAME", "")
 SOCIAL_PASSWORD = os.environ.get("SOCIAL_PASSWORD", "")
 
+# YouTube cookies can be supplied as a mounted file or as base64 in an
+# environment variable.  This keeps the container image free of credentials.
+YOUTUBE_COOKIES_PATH = os.environ.get("YOUTUBE_COOKIES_PATH", "")
+YOUTUBE_COOKIES_B64 = os.environ.get("YOUTUBE_COOKIES_B64", "")
+
 TWITCH_OAUTH = os.environ.get("TWITCH_OAUTH", "")
 TWITCH_USER  = os.environ.get("TWITCH_USER", "")
 TWITCH_PASS  = os.environ.get("TWITCH_PASS", "")
@@ -42,10 +48,47 @@ TWITCH_PASS  = os.environ.get("TWITCH_PASS", "")
 # Owner / admins
 _raw_admin_ids = os.environ.get("ADMIN_IDS", "0")
 ADMIN_ID  = int(_raw_admin_ids.split(",")[0].strip()) if _raw_admin_ids.strip() else 0
-AUTH_FILE = "authorized_users.json"
+AUTH_FILE = os.environ.get("AUTH_FILE", "authorized_users.json")
 
 DOWNLOAD_DIR = "/tmp/downloads/"
 os.makedirs(DOWNLOAD_DIR, mode=0o777, exist_ok=True)
+
+def _youtube_cookie_file() -> str | None:
+    """Return the first usable Netscape cookies file, using absolute paths."""
+    candidates = []
+    if YOUTUBE_COOKIES_PATH:
+        candidates.append(os.path.abspath(os.path.expanduser(YOUTUBE_COOKIES_PATH)))
+    # Uploads made with /cookies are stored beside this file.
+    bot_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.extend([
+        os.path.join(bot_dir, "cookies.txt"),
+        os.path.join(os.path.dirname(bot_dir), "cookies.txt"),
+        os.path.join(os.getcwd(), "cookies.txt"),
+    ])
+    for path in candidates:
+        if os.path.isfile(path) and os.path.getsize(path) > 32:
+            return path
+    return None
+
+def _materialize_youtube_cookies() -> str | None:
+    """Materialize base64 cookies once, without ever logging their contents."""
+    if YOUTUBE_COOKIES_B64:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        try:
+            import base64 as _b64
+            raw = _b64.b64decode(YOUTUBE_COOKIES_B64, validate=True)
+            if len(raw) > 32:
+                with open(path, "wb") as f:
+                    f.write(raw)
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+        except Exception as exc:
+            print(f"[cookies] no se pudo leer YOUTUBE_COOKIES_B64: {exc}")
+    return _youtube_cookie_file()
+
+_materialize_youtube_cookies()
 
 start_time = time.time()
 
@@ -1279,10 +1322,9 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     base_opts["writeautomaticsub"] = True
                     base_opts["subtitleslangs"]    = ["es", "es-419", "es-MX", "es-ES", "es-CO", "es-AR"]
                     base_opts["subtitlesformat"]   = "srt/vtt/best"
-                if os.path.exists("telegram-bot/cookies.txt"):
-                    base_opts["cookiefile"] = "telegram-bot/cookies.txt"
-                elif os.path.exists("cookies.txt"):
-                    base_opts["cookiefile"] = "cookies.txt"
+                _cookie = _youtube_cookie_file()
+                if _cookie:
+                    base_opts["cookiefile"] = _cookie
 
                 def _extract(opts):
                     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1903,8 +1945,8 @@ async def procesar_audio(client: Client, message: Message, url: str, uname: str,
                     {"key": "EmbedThumbnail"},
                 ],
             }
-            if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
-            elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
+            _cookie = _youtube_cookie_file()
+            if _cookie: opts["cookiefile"] = _cookie
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
@@ -1981,8 +2023,8 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
         def extract_info_only():
             opts = {"quiet": True, "no_warnings": True,
                     "extract_flat": "in_playlist", "skip_download": True}
-            if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
-            elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
+            _cookie = _youtube_cookie_file()
+            if _cookie: opts["cookiefile"] = _cookie
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return ydl.extract_info(url, download=False)
         info = await asyncio.to_thread(extract_info_only)
@@ -2040,8 +2082,8 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
                         {"key": "EmbedThumbnail"},
                     ],
                 }
-                if os.path.exists("telegram-bot/cookies.txt"): opts["cookiefile"] = "telegram-bot/cookies.txt"
-                elif os.path.exists("cookies.txt"): opts["cookiefile"] = "cookies.txt"
+                _cookie = _youtube_cookie_file()
+                if _cookie: opts["cookiefile"] = _cookie
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     inf = ydl.extract_info(_url, download=True)
                     if inf:
@@ -2331,8 +2373,19 @@ async def procesar_pdf(client: Client, message: Message, url: str,
 
 # ─── CÓMICS / GALERÍAS ────────────────────────────────────────────────────────
 
+_COMIC_DOMAINS = (
+    "toonx.net", "jav.guru", "javmiku.com",
+    "javnorth.com", "hentaiheroes.com", "nhentai.net",
+)
+
+def _is_comic_page_url(url: str) -> bool:
+    """Sites whose pages contain an ordered gallery rather than a video URL."""
+    low = url.lower()
+    return low.startswith(("http://", "https://")) and any(d in low for d in _COMIC_DOMAINS)
+
 # Selectores CSS en orden de prioridad para encontrar imágenes del cómic
 _COMIC_SELECTORS = [
+    "div.pp-gallery-view",        # ToonX gallery (only reader pages)
     "div.pp-comic-content",       # toonx.net
     "div.reading-content",        # Madara WP manga theme
     "div.chapter-content",
@@ -2897,7 +2950,10 @@ async def queue_worker():
         want_subs = item[6] if len(item) > 6 else False
         print(f"[worker] Procesando: {url[:60]} para {uname}")
         try:
-            await procesar_descarga(client, message, url, uname, uid, label, want_subs=want_subs)
+            if _is_comic_page_url(url):
+                await procesar_comic(client, message, url, uname, uid)
+            else:
+                await procesar_descarga(client, message, url, uname, uid, label, want_subs=want_subs)
         except Exception as e:
             print(f"[worker] error: {e}")
         finally:
@@ -3133,6 +3189,25 @@ async def cb_music_play(client: Client, cb: CallbackQuery):
         await download_queue.put((client, ref, url, uname, uid, queue_label, False))
 
 
+@bot.on_message(filters.command(["comic", "comicdl", "manga"]))
+async def cmd_comic(client: Client, message: Message):
+    """Download an ordered comic/gallery page from a supported site."""
+    if not is_auth(message.from_user.id):
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].startswith(("http://", "https://")):
+        await message.reply_text(
+            f"╭─ 📖 /comic — Descargar cómic o galería\n┊\n"
+            f"┊ Uso: /comic <URL de la página>\n┊\n"
+            f"┊ Compatible con galerías de ToonX y JAV Guru.\n"
+            f"┊ Las páginas se mantienen en el orden original.\n"
+            f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
+        )
+        return
+    uname = message.from_user.username or message.from_user.first_name or str(message.from_user.id)
+    await procesar_comic(client, message, parts[1].strip(), uname, message.from_user.id)
+
+
 @bot.on_message(filters.command("coms"))
 async def cmd_coms(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
@@ -3148,6 +3223,9 @@ async def cmd_coms(client: Client, message: Message):
         "    Soporta: links directos (.pdf), Google Drive,\n"
         "    MEGA y MediaFire\n"
         "• Envía un link .pdf directamente — se descarga solo\n\n"
+        "📖 <b>Cómics y galerías:</b>\n"
+        "• /comic &lt;url&gt; — Descarga páginas en orden\n"
+        "• También puedes enviar directamente un link de ToonX/JAV Guru\n\n"
         "🔗 <b>Descarga por link:</b>\n"
         "• Envía cualquier link — YouTube, TikTok, Instagram, etc.\n"
         "• /audio &lt;link&gt; — Extraer y descargar audio MP3\n"
@@ -3994,7 +4072,9 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "play", "Play", "playv", "Playv", "playvideo", "pv",
                  "search", "buscar", "musica", "música", "sm",
                  # PDF / documentos
-                 "pdf", "doc", "gdrive"]
+                 "pdf", "doc", "gdrive",
+                 # Cómics / galerías
+                 "comic", "comicdl", "manga"]
 
 @bot.on_message(
     filters.text
@@ -4047,6 +4127,8 @@ async def handle_text_input(client: Client, message: Message):
         label = f"Cola: {i}/{len(urls)}"
         if "crunchyroll.com" in url.lower():
             asyncio.create_task(procesar_crunchyroll(client, message, url, uname, uid, want_subs))
+        elif _is_comic_page_url(url):
+            asyncio.create_task(procesar_comic(client, message, url, uname, uid))
         elif _is_pdf_url(url) or _is_gdrive_url(url):
             # PDFs y Google Drive: bypass de cola → procesar_pdf directo
             asyncio.create_task(procesar_pdf(client, message, url, uname, uid, label))
