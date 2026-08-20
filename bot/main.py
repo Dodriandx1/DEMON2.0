@@ -2553,15 +2553,28 @@ async def procesar_comic(client: Client, message: Message, url: str,
                     ext = ".jpg"
                 fpath = os.path.join(DOWNLOAD_DIR, f"{task_id}_comic_{idx:04d}{ext}")
                 try:
+                    # Algunos sitios publican la portada en un CDN con
+                    # Cloudflare, pero mantienen un espejo con el mismo path.
+                    candidates = [img_url]
+                    if "cdn.javmiku.com/" in img_url:
+                        candidates.append(img_url.replace("cdn.javmiku.com/", "cdn.javnorth.com/"))
+                    if "cdn.javnorth.com/" in img_url:
+                        candidates.append(img_url.replace("cdn.javnorth.com/", "cdn.javmiku.com/"))
+
                     async with httpx.AsyncClient(
                         timeout=60.0, follow_redirects=True, headers=headers
                     ) as h:
-                        r = await h.get(img_url)
-                        if r.status_code != 200 or len(r.content) < 2000:
-                            return None
-                        with open(fpath, "wb") as f:
-                            f.write(r.content)
-                    return fpath
+                        for candidate in dict.fromkeys(candidates):
+                            try:
+                                r = await h.get(candidate)
+                                if r.status_code != 200 or len(r.content) < 2000:
+                                    continue
+                                with open(fpath, "wb") as f:
+                                    f.write(r.content)
+                                return fpath
+                            except httpx.HTTPError:
+                                continue
+                    return None
                 except Exception:
                     return None
 
