@@ -2329,6 +2329,292 @@ async def procesar_pdf(client: Client, message: Message, url: str,
             except: pass
 
 
+# ─── CÓMICS / GALERÍAS ────────────────────────────────────────────────────────
+
+# Selectores CSS en orden de prioridad para encontrar imágenes del cómic
+_COMIC_SELECTORS = [
+    "div.pp-comic-content",       # toonx.net
+    "div.reading-content",        # Madara WP manga theme
+    "div.chapter-content",
+    "div#chapter-images",
+    "div.comic-reading",
+    "div.comic-images",
+    "div#comic",
+    "div.entry-content",          # WordPress genérico
+    "div.post-content",
+    "div.td-post-content",
+    "article.post",
+    "main article",
+    "article",
+    "main",
+]
+
+# Patrones de URLs que indican imágenes de la UI (no del cómic)
+_UI_IMG_PATTERNS = re.compile(
+    r"(logo|banner|icon|avatar|header|footer|sidebar|widget|"
+    r"advert|sponsor|social|share|button|pixel|1x1|blank|"
+    r"comment|gravatar|emoji|wp-includes|themes/)",
+    re.IGNORECASE,
+)
+
+async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
+    """
+    Descarga la página y extrae URLs de imágenes del cómic en orden.
+    Retorna (lista_de_urls, titulo_del_cómic).
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as h:
+        r = await h.get(page_url)
+        r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    # Título de la página
+    title = ""
+    og_title = soup.find("meta", property="og:title")
+    if og_title and og_title.get("content"):
+        title = og_title["content"].strip()
+    elif soup.title:
+        title = soup.title.get_text(strip=True)
+
+    # Probar selectores en orden
+    images: list[str] = []
+    for sel in _COMIC_SELECTORS:
+        container = soup.select_one(sel)
+        if not container:
+            continue
+        candidates = []
+        for img in container.find_all("img"):
+            src = (
+                img.get("src")
+                or img.get("data-src")
+                or img.get("data-lazy-src")
+                or img.get("data-original")
+                or img.get("data-url")
+                or ""
+            )
+            src = src.strip()
+            if not src or not src.startswith("http"):
+                continue
+            # Excluir imágenes de la UI
+            if _UI_IMG_PATTERNS.search(src):
+                continue
+            # Excluir imágenes muy pequeñas declaradas en el HTML
+            w = img.get("width") or "0"
+            h_ = img.get("height") or "0"
+            try:
+                if int(w) < 100 or int(h_) < 100:
+                    continue
+            except ValueError:
+                pass
+            candidates.append(src)
+
+        if candidates:
+            images = candidates
+            break  # Usamos el primer selector que da resultados
+
+    # Si ningún selector funciona, buscar imágenes de wp-content/uploads en toda la página
+    if not images:
+        all_imgs = soup.find_all("img")
+        page_host = page_url.split("/")[2]
+        for img in all_imgs:
+            src = img.get("src") or img.get("data-src") or ""
+            src = src.strip()
+            if not src.startswith("http"):
+                continue
+            img_host = src.split("/")[2] if "//" in src else ""
+            if img_host == page_host and "wp-content/uploads" in src:
+                if not _UI_IMG_PATTERNS.search(src):
+                    images.append(src)
+
+    # Deduplicar preservando orden
+    seen: set[str] = set()
+    unique: list[str] = []
+    for u in images:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+    return unique, title
+
+
+async def procesar_comic(client: Client, message: Message, url: str,
+                         uname: str, uid: int, msg: Message | None = None):
+    """Raspa imágenes de una página de cómic/manga y las envía como álbum."""
+    task_id = f"{uid}_{int(time.time())}"
+    active_tasks[task_id] = "RUNNING"
+    _current = asyncio.current_task()
+    if _current: _task_handles[task_id] = _current
+
+    owned_msg = msg is None  # si nosotros creamos el mensaje, nosotros lo borramos
+    if msg is None:
+        msg = await message.reply_text(
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ 🔍 Analizando página...\n"
+            f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}"
+        )
+
+    tmp_files: list[str] = []
+    try:
+        await safe_edit(msg,
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ 🔍 Extrayendo imágenes del cómic...\n"
+            f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
+
+        img_urls, page_title = await _scrape_comic_images(url)
+        if not img_urls:
+            raise Exception(
+                "No se encontraron imágenes en esa página.\n"
+                "El sitio puede requerir JavaScript o login."
+            )
+
+        total = len(img_urls)
+        await safe_edit(msg,
+            f"╭ Task By → 「{uname}」\n"
+            f"┊ 🖼️ Encontradas: {total} imágenes\n"
+            f"┊ ⬇️ Descargando...\n"
+            f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
+
+        # Descargar todas las imágenes manteniendo el orden
+        sem = asyncio.Semaphore(4)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": url,
+        }
+
+        async def _dl_one(idx: int, img_url: str) -> str | None:
+            async with sem:
+                if active_tasks.get(task_id) == "CANCELLED":
+                    return None
+                ext = os.path.splitext(img_url.split("?")[0])[1].lower()
+                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                    ext = ".jpg"
+                fpath = os.path.join(DOWNLOAD_DIR, f"{task_id}_comic_{idx:04d}{ext}")
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=60.0, follow_redirects=True, headers=headers
+                    ) as h:
+                        r = await h.get(img_url)
+                        if r.status_code != 200 or len(r.content) < 2000:
+                            return None
+                        with open(fpath, "wb") as f:
+                            f.write(r.content)
+                    return fpath
+                except Exception:
+                    return None
+
+        tasks_dl = [_dl_one(i, u) for i, u in enumerate(img_urls)]
+        results  = await asyncio.gather(*tasks_dl)
+
+        # Filtrar fallos y ordenar por índice de nombre
+        for r in results:
+            if r and os.path.exists(r):
+                tmp_files.append(r)
+        tmp_files.sort()
+
+        if not tmp_files:
+            raise Exception("No se pudieron descargar las imágenes del cómic.")
+
+        downloaded = len(tmp_files)
+        title_short = page_title[:60] if page_title else url.split("/")[-2]
+
+        # Convertir webp → jpg para Telegram (send_photo no acepta webp a veces)
+        from pyrogram.types import InputMediaPhoto, InputMediaDocument
+        ready: list[str] = []
+        for fpath in tmp_files:
+            if fpath.lower().endswith(".webp"):
+                out_jpg = fpath[:-5] + ".jpg"
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", fpath, "-q:v", "2", out_jpg,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await asyncio.wait_for(proc.wait(), timeout=15)
+                    if os.path.exists(out_jpg) and os.path.getsize(out_jpg) > 0:
+                        try: os.remove(fpath)
+                        except: pass
+                        ready.append(out_jpg)
+                    else:
+                        ready.append(fpath)
+                except Exception:
+                    ready.append(fpath)
+            else:
+                ready.append(fpath)
+
+        # Enviar en álbumes de hasta 10 fotos
+        album_caption = f"📖 <b>{title_short}</b>\n🖼️ {downloaded} páginas\n\n{BOT_SIGNATURE}"
+        batch_num     = 0
+        batches       = [ready[i:i+10] for i in range(0, len(ready), 10)]
+        total_batches = len(batches)
+
+        for batch in batches:
+            if active_tasks.get(task_id) == "CANCELLED":
+                break
+            batch_num += 1
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n"
+                f"┊ ⬆️ Subiendo álbum {batch_num}/{total_batches}...\n"
+                f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
+            media_group = []
+            for fi, fpath in enumerate(batch):
+                cap   = album_caption if batch_num == 1 and fi == 0 else None
+                parse = enums.ParseMode.HTML if cap else None
+                try:
+                    media_group.append(InputMediaPhoto(fpath, caption=cap, parse_mode=parse))
+                except Exception:
+                    media_group.append(InputMediaDocument(fpath, caption=cap, parse_mode=parse))
+            try:
+                await client.send_media_group(message.chat.id, media_group)
+            except Exception:
+                # Si falla el álbum, enviar una por una como documento
+                for fi, fpath in enumerate(batch):
+                    cap = album_caption if batch_num == 1 and fi == 0 else None
+                    try:
+                        await client.send_document(
+                            message.chat.id, fpath,
+                            caption=cap, parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+
+        _stats["downloads"] += 1
+        if owned_msg:
+            try: await msg.delete()
+            except: pass
+        else:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n"
+                f"┊ ✅ {downloaded} páginas enviadas\n"
+                f"┊ 📖 {title_short}\n"
+                f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
+            await asyncio.sleep(5)
+            try: await msg.delete()
+            except: pass
+
+    except (Exception, asyncio.CancelledError) as e:
+        is_cancel = isinstance(e, asyncio.CancelledError) or "USER_CANCELLED" in str(e)
+        if is_cancel: _stats["cancelados"] += 1
+        else:         _stats["fallidos"]   += 1
+        err = "🛑 Descarga cancelada." if is_cancel else f"❌ Error: {str(e)[:300]}"
+        try:
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n┊ {err}\n"
+                f"╰──────────────\n\n{BOT_SIGNATURE}")
+        except: pass
+    finally:
+        active_tasks.pop(task_id, None)
+        _task_handles.pop(task_id, None)
+        for f in tmp_files:
+            try: os.remove(f)
+            except: pass
+
+
 # ─── TORRENT ──────────────────────────────────────────────────────────────────
 _TORRENT_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".ts", ".m2ts", ".wmv", ".flv", ".webm"}
 
