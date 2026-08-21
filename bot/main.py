@@ -17,6 +17,7 @@ import struct
 import base64
 import platform
 import shutil
+from urllib.parse import unquote
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters, enums
@@ -807,6 +808,36 @@ def _crunchy_cookie_path() -> str | None:
         if os.path.exists(p) and os.path.getsize(p) > 0:
             return p
     return None
+
+
+def _crunchy_slug_title(url: str) -> str:
+    """Extract the human-readable episode title from a Crunchyroll URL."""
+    slug = url.rstrip("/").split("/")[-1].split("?")[0]
+    slug = unquote(slug).replace("-", " ").strip()
+    return re.sub(r"\s+", " ", slug).strip().title()
+
+
+async def buscar_anime_metadata(query: str) -> dict:
+    """Look up public anime metadata without accessing protected video."""
+    query = query.strip()
+    if query.startswith(("http://", "https://")) and "crunchyroll.com/" in query.lower():
+        query = _crunchy_slug_title(query)
+    if not query:
+        return {}
+
+    # Jikan provides public AniList/MyAnimeList metadata: aliases, Japanese
+    # title and romanized title. It does not provide video files or DRM data.
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        headers={"User-Agent": "AzunaBot/1.0 anime metadata lookup"},
+    ) as h:
+        response = await h.get(
+            "https://api.jikan.moe/v4/anime",
+            params={"q": query, "limit": 5, "sfw": "true"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    return payload["data"][0] if payload.get("data") else {}
 
 
 # ─── CRUNCHYROLL DOWNLOADER (1080p + Subtítulos) ──────────────────────────────
@@ -3061,6 +3092,57 @@ bot = Client("bot_session", api_id=API_ID, api_hash=API_HASH,
 
 # ─── COMANDOS ─────────────────────────────────────────────────────────────────
 
+@bot.on_message(filters.command(["a", "buscaranime", "animeinfo", "anime"]))
+async def cmd_buscar_anime(client: Client, message: Message):
+    """Show legal/public anime metadata for a title or Crunchyroll URL."""
+    if not is_auth(message.from_user.id):
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply_text(
+            f"╭─ 🔎 /a\n┊\n"
+            f"┊ Uso: /a <nombre o URL de Crunchyroll>\n┊\n"
+            f"┊ Busca título japonés, romaji y nombres alternativos.\n"
+            f"┊ No descarga ni intenta evadir DRM.\n"
+            f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
+        )
+        return
+
+    query = parts[1].strip()
+    msg = await message.reply_text(
+        f"🔎 Buscando información pública del anime...\n\n{BOT_SIGNATURE}"
+    )
+    try:
+        original_query = query
+        item = await buscar_anime_metadata(query)
+        if not item:
+            await safe_edit(msg, f"❌ No encontré coincidencias para:\n{original_query}\n\n{BOT_SIGNATURE}")
+            return
+
+        titles = item.get("titles") or []
+        title_default = item.get("title") or "Sin título"
+        title_japanese = item.get("title_japanese") or "No disponible"
+        title_english = item.get("title_english") or "No disponible"
+        synonyms = [t.get("title") for t in titles if t.get("type") == "Synonym" and t.get("title")]
+        aliases = ", ".join(synonyms[:6]) if synonyms else "No disponibles"
+        year = item.get("year") or (item.get("aired") or {}).get("prop", {}).get("from", "")[:4]
+        text = (
+            f"╭─ 🔎 <b>Información del anime</b>\n"
+            f"┊ <b>Título:</b> {title_default}\n"
+            f"┊ <b>Japonés:</b> {title_japanese}\n"
+            f"┊ <b>Inglés:</b> {title_english}\n"
+            f"┊ <b>Romaji/alias:</b> {aliases}\n"
+            f"┊ <b>Año:</b> {year or 'No disponible'}\n"
+            f"┊ <b>Estado:</b> {item.get('status') or 'No disponible'}\n"
+            f"╰─────────────────────────\n\n"
+            f"ℹ️ Esto solo consulta metadatos públicos. Para descargar desde "
+            f"Crunchyroll se necesita acceso autorizado y sus cookies válidas.\n\n"
+            f"{BOT_SIGNATURE}"
+        )
+        await safe_edit(msg, text)
+    except Exception as exc:
+        await safe_edit(msg, f"❌ No se pudo consultar la información: {str(exc)[:180]}\n\n{BOT_SIGNATURE}")
+
 # ── Música: /play, /playv, /search ──────────────────────────────────────────
 @bot.on_message(filters.command(["play", "Play"]))
 async def cmd_play(client: Client, message: Message):
@@ -3305,6 +3387,8 @@ async def cmd_coms(client: Client, message: Message):
         "• /playv &lt;canción/artista&gt; — Busca y descarga el video del top resultado\n"
         "• /search &lt;canción/artista&gt; — Muestra 5 resultados con botones\n"
         "    🎵 = descargar MP3   🎬 = descargar video\n\n"
+        "🔎 <b>Anime:</b>\n"
+        "• /a &lt;nombre o URL de Crunchyroll&gt; — Consulta títulos y alias\n\n"
         "📕 <b>PDF y documentos:</b>\n"
         "• /pdf &lt;url&gt; — Descarga PDF sin pérdida de calidad\n"
         "    Soporta: links directos (.pdf), Google Drive,\n"
@@ -4160,6 +4244,8 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  # Música
                  "play", "Play", "playv", "Playv", "playvideo", "pv",
                  "search", "buscar", "musica", "música", "sm",
+                 # Consulta pública de metadatos de anime
+                 "a", "buscaranime", "animeinfo", "anime",
                  # PDF / documentos
                  "pdf", "doc", "gdrive",
                  # Cómics / galerías
