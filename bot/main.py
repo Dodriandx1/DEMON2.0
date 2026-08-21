@@ -2500,9 +2500,29 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
     return unique, title
 
 
+async def _images_to_pdf(image_files: list[str], output_path: str) -> None:
+    """Create an ordered PDF without changing the source page order.
+
+    ImageMagick is already part of the bot runtime (and the Docker image).
+    The quality setting avoids unnecessary JPEG recompression where possible.
+    """
+    if not image_files:
+        raise ValueError("No hay páginas para crear el PDF.")
+    proc = await asyncio.create_subprocess_exec(
+        "convert", *image_files, "-quality", "100", "-compress", "Zip",
+        "-density", "150", output_path,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    if proc.returncode != 0 or not os.path.exists(output_path):
+        detail = stderr.decode(errors="replace").strip()[-300:]
+        raise RuntimeError(f"No se pudo crear el PDF{': ' + detail if detail else '.'}")
+
+
 async def procesar_comic(client: Client, message: Message, url: str,
-                         uname: str, uid: int, msg: Message | None = None):
-    """Raspa imágenes de una página de cómic/manga y las envía como álbum."""
+                         uname: str, uid: int, msg: Message | None = None,
+                         as_pdf: bool = False):
+    """Scrape an ordered comic/gallery and send it as images or one PDF."""
     task_id = f"{uid}_{int(time.time())}"
     active_tasks[task_id] = "RUNNING"
     _current = asyncio.current_task()
@@ -2617,41 +2637,67 @@ async def procesar_comic(client: Client, message: Message, url: str,
             else:
                 ready.append(fpath)
 
-        # Enviar en álbumes de hasta 10 fotos
-        album_caption = f"📖 <b>{title_short}</b>\n🖼️ {downloaded} páginas\n\n{BOT_SIGNATURE}"
-        batch_num     = 0
-        batches       = [ready[i:i+10] for i in range(0, len(ready), 10)]
-        total_batches = len(batches)
-
-        for batch in batches:
-            if active_tasks.get(task_id) == "CANCELLED":
-                break
-            batch_num += 1
+        if as_pdf:
+            pdf_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_comic.pdf")
+            tmp_files.append(pdf_path)
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n"
-                f"┊ ⬆️ Subiendo álbum {batch_num}/{total_batches}...\n"
-                f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
-            media_group = []
-            for fi, fpath in enumerate(batch):
-                cap   = album_caption if batch_num == 1 and fi == 0 else None
-                parse = enums.ParseMode.HTML if cap else None
-                try:
-                    media_group.append(InputMediaPhoto(fpath, caption=cap, parse_mode=parse))
-                except Exception:
-                    media_group.append(InputMediaDocument(fpath, caption=cap, parse_mode=parse))
-            try:
-                await client.send_media_group(message.chat.id, media_group)
-            except Exception:
-                # Si falla el álbum, enviar una por una como documento
+                f"┊ 📕 Creando PDF con {downloaded} páginas...\n"
+                f"╰ Mode     : #ComicPDF\n\n{BOT_SIGNATURE}")
+            await _images_to_pdf(ready, pdf_path)
+            pdf_size = os.path.getsize(pdf_path) / (1024 * 1024)
+            pdf_name = re.sub(r"[^\w\- ]+", "", title_short, flags=re.UNICODE).strip()
+            pdf_name = (pdf_name[:80] or "comic") + ".pdf"
+            await safe_edit(msg,
+                f"╭ Task By → 「{uname}」\n"
+                f"┊ 📕 PDF listo ({pdf_size:.1f} MB)\n"
+                f"┊ ⬆️ Subiendo archivo...\n"
+                f"╰ Mode     : #ComicPDF\n\n{BOT_SIGNATURE}")
+            await client.send_document(
+                chat_id=message.chat.id, document=pdf_path, file_name=pdf_name,
+                caption=(
+                    f"📖 <b>{title_short}</b>\n"
+                    f"📕 {downloaded} páginas en PDF\n"
+                    f"📦 Tamaño: {pdf_size:.1f} MB\n\n{BOT_SIGNATURE}"
+                ),
+                parse_mode=enums.ParseMode.HTML,
+            )
+        else:
+            # Enviar en álbumes de hasta 10 fotos
+            album_caption = f"📖 <b>{title_short}</b>\n🖼️ {downloaded} páginas\n\n{BOT_SIGNATURE}"
+            batch_num     = 0
+            batches       = [ready[i:i+10] for i in range(0, len(ready), 10)]
+            total_batches = len(batches)
+
+            for batch in batches:
+                if active_tasks.get(task_id) == "CANCELLED":
+                    break
+                batch_num += 1
+                await safe_edit(msg,
+                    f"╭ Task By → 「{uname}」\n"
+                    f"┊ ⬆️ Subiendo álbum {batch_num}/{total_batches}...\n"
+                    f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
+                media_group = []
                 for fi, fpath in enumerate(batch):
-                    cap = album_caption if batch_num == 1 and fi == 0 else None
+                    cap   = album_caption if batch_num == 1 and fi == 0 else None
+                    parse = enums.ParseMode.HTML if cap else None
                     try:
-                        await client.send_document(
-                            message.chat.id, fpath,
-                            caption=cap, parse_mode=enums.ParseMode.HTML
-                        )
+                        media_group.append(InputMediaPhoto(fpath, caption=cap, parse_mode=parse))
                     except Exception:
-                        pass
+                        media_group.append(InputMediaDocument(fpath, caption=cap, parse_mode=parse))
+                try:
+                    await client.send_media_group(message.chat.id, media_group)
+                except Exception:
+                    # Si falla el álbum, enviar una por una como documento
+                    for fi, fpath in enumerate(batch):
+                        cap = album_caption if batch_num == 1 and fi == 0 else None
+                        try:
+                            await client.send_document(
+                                message.chat.id, fpath,
+                                caption=cap, parse_mode=enums.ParseMode.HTML
+                            )
+                        except Exception:
+                            pass
 
         _stats["downloads"] += 1
         if owned_msg:
@@ -2660,7 +2706,7 @@ async def procesar_comic(client: Client, message: Message, url: str,
         else:
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n"
-                f"┊ ✅ {downloaded} páginas enviadas\n"
+                f"┊ ✅ {downloaded} páginas {'en PDF' if as_pdf else 'enviadas'}\n"
                 f"┊ 📖 {title_short}\n"
                 f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
             await asyncio.sleep(5)
@@ -3152,7 +3198,7 @@ async def cmd_search(client: Client, message: Message):
 
 @bot.on_message(filters.command(["pdf", "doc", "gdrive"]))
 async def cmd_pdf(client: Client, message: Message):
-    """/pdf <url> — Descarga y envía cualquier PDF/documento sin pérdida de calidad."""
+    """/pdf <url> — Descarga un documento o convierte una galería en PDF."""
     if not is_auth(message.from_user.id): return
     uid   = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
@@ -3160,12 +3206,13 @@ async def cmd_pdf(client: Client, message: Message):
     if len(parts) < 2 or not parts[1].strip().startswith("http"):
         await message.reply_text(
             f"╭─ 📕 /pdf — Descargar PDF o documento\n┊\n"
-            f"┊ Uso: /pdf <url del archivo>\n┊\n"
+            f"┊ Uso: /pdf <url del archivo o galería>\n┊\n"
             f"┊ Soporta:\n"
             f"┊   • Links directos (.pdf, .epub, .cbr, etc.)\n"
             f"┊   • Google Drive (drive.google.com/...)\n"
             f"┊   • MEGA (mega.nz/file/...)\n"
             f"┊   • MediaFire (mediafire.com/...)\n┊\n"
+            f"┊   • Cómics/galerías → PDF en orden\n┊\n"
             f"┊ 💡 También puedes enviar el link directo\n"
             f"┊    sin comando — si termina en .pdf se\n"
             f"┊    descargará automáticamente.\n"
@@ -3173,7 +3220,30 @@ async def cmd_pdf(client: Client, message: Message):
         )
         return
     url = parts[1].strip()
-    asyncio.create_task(procesar_pdf(client, message, url, uname, uid))
+    if _is_comic_page_url(url):
+        asyncio.create_task(procesar_comic(client, message, url, uname, uid, as_pdf=True))
+    else:
+        asyncio.create_task(procesar_pdf(client, message, url, uname, uid))
+
+
+@bot.on_message(filters.command(["comicpdf", "mangapdf"]))
+async def cmd_comic_pdf(client: Client, message: Message):
+    """Download a comic/gallery as a single ordered PDF."""
+    if not is_auth(message.from_user.id):
+        return
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().startswith(("http://", "https://")):
+        await message.reply_text(
+            f"╭─ 📕 /comicpdf — Cómic en un solo PDF\n┊\n"
+            f"┊ Uso: /comicpdf <URL de la página>\n┊\n"
+            f"┊ Descarga las páginas en su orden original\n"
+            f"┊ y las envía como un único documento PDF.\n"
+            f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
+        )
+        return
+    uid = message.from_user.id
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    await procesar_comic(client, message, parts[1].strip(), uname, uid, as_pdf=True)
 
 
 @bot.on_callback_query(filters.regex(r"^mplay:(.+):(\d+):(a|v)$"))
@@ -3242,6 +3312,8 @@ async def cmd_coms(client: Client, message: Message):
         "• Envía un link .pdf directamente — se descarga solo\n\n"
         "📖 <b>Cómics y galerías:</b>\n"
         "• /comic &lt;url&gt; — Descarga páginas en orden\n"
+        "• /comicpdf &lt;url&gt; — Descarga todo como un único PDF\n"
+        "• /pdf &lt;url de cómic&gt; — También crea el PDF\n"
         "• También puedes enviar directamente un link de ToonX/JAV Guru\n\n"
         "🔗 <b>Descarga por link:</b>\n"
         "• Envía cualquier link — YouTube, TikTok, Instagram, etc.\n"
@@ -4091,7 +4163,7 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  # PDF / documentos
                  "pdf", "doc", "gdrive",
                  # Cómics / galerías
-                 "comic", "comicdl", "manga"]
+                 "comic", "comicdl", "manga", "comicpdf", "mangapdf"]
 
 @bot.on_message(
     filters.text
