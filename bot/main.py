@@ -827,17 +827,75 @@ async def buscar_anime_metadata(query: str) -> dict:
 
     # Jikan provides public AniList/MyAnimeList metadata: aliases, Japanese
     # title and romanized title. It does not provide video files or DRM data.
-    async with httpx.AsyncClient(
-        timeout=20.0,
-        headers={"User-Agent": "AzunaBot/1.0 anime metadata lookup"},
-    ) as h:
-        response = await h.get(
-            "https://api.jikan.moe/v4/anime",
-            params={"q": query, "limit": 5, "sfw": "true"},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    return payload["data"][0] if payload.get("data") else {}
+    headers = {"User-Agent": "AzunaBot/1.0 anime metadata lookup"}
+    async with httpx.AsyncClient(timeout=20.0, headers=headers) as h:
+        # Jikan occasionally returns 502/504 while its upstream is busy.
+        for attempt in range(3):
+            try:
+                response = await h.get(
+                    "https://api.jikan.moe/v4/anime",
+                    params={"q": query, "limit": 5, "sfw": "true"},
+                )
+                if response.status_code in (429, 502, 503, 504):
+                    if attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    break
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("data"):
+                    return payload["data"][0]
+                break
+            except (httpx.TimeoutException, httpx.HTTPStatusError, ValueError):
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                else:
+                    break
+
+        # Fallback independent public catalog. It only returns metadata.
+        try:
+            anilist_query = """
+            query ($search: String) {
+              Page(perPage: 1) {
+                media(search: $search, type: ANIME) {
+                  title { romaji english native }
+                  synonyms
+                  seasonYear
+                  status
+                }
+              }
+            }
+            """
+            response = await h.post(
+                "https://graphql.anilist.co",
+                json={"query": anilist_query, "variables": {"search": query}},
+            )
+            response.raise_for_status()
+            media = response.json().get("data", {}).get("Page", {}).get("media", [])
+            if media:
+                item = media[0]
+                title = item.get("title") or {}
+                return {
+                    "title": title.get("romaji") or title.get("english") or title.get("native"),
+                    "title_english": title.get("english"),
+                    "title_japanese": title.get("native"),
+                    "titles": [{"type": "Synonym", "title": s} for s in item.get("synonyms", [])],
+                    "year": item.get("seasonYear"),
+                    "status": item.get("status"),
+                }
+        except (httpx.TimeoutException, httpx.HTTPError, ValueError):
+            pass
+
+    # A catalog outage should not expose a raw 504 to the user.
+    return {
+        "title": query,
+        "title_english": None,
+        "title_japanese": None,
+        "titles": [],
+        "year": None,
+        "status": "No disponible (catálogo temporalmente fuera de servicio)",
+        "_catalog_unavailable": True,
+    }
 
 
 # ─── CRUNCHYROLL DOWNLOADER (1080p + Subtítulos) ──────────────────────────────
