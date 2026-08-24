@@ -3951,13 +3951,6 @@ async def cmd_crfiles(client: Client, message: Message):
         doc_msg = message.reply_to_message
 
     # ── Sin archivo: mostrar estado actual ──────────────────────────────────
-doc_msg = None
-    if message.document:
-        doc_msg = message
-    elif message.reply_to_message and message.reply_to_message.document:
-        doc_msg = message.reply_to_message
-
-    # ── Sin archivo: mostrar estado actual ──────────────────────────────────
     if doc_msg is None:
         ruta_cookie = _crunchy_cookie_path() or "crunchyroll_cookies.txt"
         
