@@ -3951,9 +3951,11 @@ async def cmd_crfiles(client: Client, message: Message):
         doc_msg = message.reply_to_message
 
     # ── Sin archivo: mostrar estado actual ──────────────────────────────────
-    if doc_msg is None:
+  if doc_msg is None:
+        ruta_cookie = _crunchy_cookie_path() or "crunchyroll_cookies.txt"
+        
         check_files = [
-            ("crunchyroll_cookies.txt", "🍪 Cookies CR"),
+            (ruta_cookie, "🍪 Cookies CR"),
             (f"{CRUNCHY_CREDS_DIR}/device.wvd",  "📱 Widevine Device"),
             (f"{CRUNCHY_CREDS_DIR}/mp4.config",  "⚙️ mp4.config"),
             (f"{CRUNCHY_CREDS_DIR}/keys.txt",    "🔑 Keys"),
