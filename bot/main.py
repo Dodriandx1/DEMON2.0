@@ -59,7 +59,6 @@ def _youtube_cookie_file() -> str | None:
     candidates = []
     if YOUTUBE_COOKIES_PATH:
         candidates.append(os.path.abspath(os.path.expanduser(YOUTUBE_COOKIES_PATH)))
-    # Uploads made with /cookies are stored beside this file.
     bot_dir = os.path.dirname(os.path.abspath(__file__))
     candidates.extend([
         os.path.join(bot_dir, "cookies.txt"),
@@ -105,15 +104,9 @@ download_queue: asyncio.Queue = asyncio.Queue()
 _stats = {"downloads": 0, "fallidos": 0, "cancelados": 0, "bytes": 0}
 
 # Calidad máxima de descarga (modificable con /quality)
-# 0 = sin límite (mejor disponible, hasta 4K/8K)
 _max_quality = 0
 
 def _build_fmt(h: int) -> tuple[str, str]:
-    """
-    Retorna (combined_fmt, split_fmt) para yt-dlp.
-    h=0  → sin límite, máxima calidad disponible (4K/8K).
-    h>0  → máximo h píxeles de alto.
-    """
     if h == 0:  # sin límite
         fmt = ("bestvideo[ext=mp4]+bestaudio[ext=m4a]"
                "/bestvideo+bestaudio[ext=m4a]"
@@ -130,7 +123,7 @@ def _build_fmt(h: int) -> tuple[str, str]:
 
 BOT_SIGNATURE = "✪ Bot By → @The_canst & @Ryota_YT"
 
-# ─── SISTEMA DE AUTORIZACIÓN ─────────────────────────────────────────────────
+# ─── SISTEMA DE AUTORIZACIÓN (CON PLANES) ────────────────────────────────────
 authorized_users = {}
 
 if os.path.exists(AUTH_FILE):
@@ -139,7 +132,7 @@ if os.path.exists(AUTH_FILE):
             _data = json.load(_f)
             if isinstance(_data, list):
                 for _uid in _data:
-                    authorized_users[str(_uid)] = {"role": "user", "username": "", "name": ""}
+                    authorized_users[str(_uid)] = {"role": "user", "username": "", "name": "", "plan": 5}
             elif isinstance(_data, dict):
                 authorized_users = _data
         except Exception:
@@ -153,12 +146,38 @@ def is_auth(uid: int) -> bool:
     return uid == ADMIN_ID or str(uid) in authorized_users
 
 def is_admin(uid: int) -> bool:
-    if uid == ADMIN_ID:
-        return True
+    if uid == ADMIN_ID: return True
     user_data = authorized_users.get(str(uid))
     return bool(user_data and user_data.get("role") == "admin")
 
-# ─── KEEP-ALIVE / WORKER ───────────────────────────────────────────────────────
+def get_user_plan(uid: int) -> int:
+    """Devuelve el plan del usuario (15 por defecto para admins)."""
+    if is_admin(uid): return 15
+    user_data = authorized_users.get(str(uid), {})
+    return user_data.get("plan", 5)
+
+def get_required_plan_for_url(url: str) -> int:
+    """Clasifica la URL y devuelve el plan mínimo requerido (5, 10 o 15)."""
+    low = url.lower()
+    
+    # PLAN 15: Nopol, Crunchyroll, Torrents, Servidores de Video Avanzados
+    plan_15_keywords = [
+        "toonx.net", "jav.guru", "javmiku.com", "javnorth.com", "hentaiheroes.com", "nhentai.net", 
+        "streamwish", "voe", "vidhide", "filemoon", "mixdrop", "mp4upload", "streamtape", 
+        "flashwish", "callistanise", "filelions", "swishdesu", "crunchyroll.com", "magnet:"
+    ]
+    if any(k in low for k in plan_15_keywords): return 15
+        
+    # PLAN 10: Nubes de Almacenamiento, PDFs, Documentos
+    plan_10_keywords = [
+        "mega.nz", "mediafire.com", "drive.google.com", "docs.google.com", ".pdf"
+    ]
+    if any(k in low for k in plan_10_keywords): return 10
+        
+    # PLAN 5: Redes sociales (YouTube, IG, TikTok, Spotify, Twitter, FB, etc.)
+    return 5
+
+# ─── KEEP-ALIVE / WORKER ──────────────────────────────────────────────────────
 def keep_alive():
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -167,7 +186,6 @@ def keep_alive():
             self.wfile.write(b"Bot is Running")
         def log_message(self, *args):
             pass
-
     port = int(os.environ.get("PORT", 8000))
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), Handler) as httpd:
@@ -181,8 +199,7 @@ if _keep_alive_enabled:
 
 # ─── UTILIDADES ───────────────────────────────────────────────────────────────
 def get_readable_size(size) -> str:
-    if size is None or size == 0:
-        return "0B"
+    if size is None or size == 0: return "0B"
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size < 1024.0:
             return f"{size:.2f} {unit}"
@@ -191,8 +208,7 @@ def get_readable_size(size) -> str:
 
 def get_readable_time(seconds: float) -> str:
     seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds}s"
+    if seconds < 60: return f"{seconds}s"
     elif seconds < 3600:
         m, s = divmod(seconds, 60)
         return f"{m}m {s}s"
@@ -203,8 +219,7 @@ def get_readable_time(seconds: float) -> str:
 
 def make_bar(percentage: float, width: int = 13) -> str:
     filled = int(percentage / 100 * width)
-    if filled >= width:
-        return "⬢" * width
+    if filled >= width: return "⬢" * width
     return "⬢" * filled + "◉" + "◌" * (width - filled - 1)
 
 def get_platform_icon(url: str) -> str:
@@ -255,15 +270,11 @@ def get_video_meta(video_path: str) -> dict:
         for line in lines:
             parts = line.split(",")
             if len(parts) == 2:
-                try:
-                    width, height = int(parts[0]), int(parts[1])
-                except ValueError:
-                    pass
+                try: width, height = int(parts[0]), int(parts[1])
+                except ValueError: pass
             elif len(parts) == 1:
-                try:
-                    duration = int(float(parts[0]))
-                except ValueError:
-                    pass
+                try: duration = int(float(parts[0]))
+                except ValueError: pass
         return {"width": width, "height": height, "duration": duration}
     except Exception:
         return {"width": 0, "height": 0, "duration": 0}
@@ -578,7 +589,6 @@ async def download_progress(current: int, total: int, msg: Message, start_t: flo
     elapsed = now - start_t
     pct     = (current / total * 100) if total > 0 else 0
     speed   = current / elapsed if elapsed > 0 else 0
-    # Aquí evitamos el cálculo negativo asegurando que total > 0
     eta     = (total - current) / speed if speed > 0 and total > 0 else 0
     panel   = download_panel(uname, pct, "Download", current, total, speed, elapsed, eta, engine, mode, task_id)
     await safe_edit(msg, panel)
@@ -634,12 +644,11 @@ async def upload_smart_file(client: Client, message: Message, path: str,
         thumb = extract_thumbnail(path)
         meta  = get_video_meta(path)
         
-        # Obligamos a definir ancho y alto para que Telegram no lo vuelva documento
         w = meta.get("width")
         h = meta.get("height")
-        if not w or w == 0: 
+        if not w or w == 0:  
             w = 1280
-        if not h or h == 0: 
+        if not h or h == 0:  
             h = 720
         
         try:
@@ -660,7 +669,6 @@ async def upload_smart_file(client: Client, message: Message, path: str,
             raise
         except Exception as e:
             print(f"Error forzando video: {e}")
-            # Fallback en caso de que Telegram rechace el formato
             await client.send_document(
                 chat_id=message.chat.id, 
                 document=path, 
@@ -672,9 +680,9 @@ async def upload_smart_file(client: Client, message: Message, path: str,
             )
         finally:
             if thumb and os.path.exists(thumb):
-                try: 
+                try:  
                     os.remove(thumb)
-                except Exception: 
+                except Exception:  
                     pass
 
     elif lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
@@ -697,9 +705,9 @@ async def upload_smart_file(client: Client, message: Message, path: str,
             pass
         finally:
             if photo_path != path and os.path.exists(photo_path):
-                try: 
+                try:  
                     os.remove(photo_path)
-                except Exception: 
+                except Exception:  
                     pass
 
     elif lower.endswith(".gif"):
@@ -740,8 +748,7 @@ async def upload_smart_file(client: Client, message: Message, path: str,
             progress=upload_progress, 
             progress_args=(msg, start_t, uname, task_id)
         )
-
-# ─── RECODIFICADOR ────────────────────────────────────────────────────────────
+        # ─── RECODIFICADOR ────────────────────────────────────────────────────────────
 def probe_video(input_path: str) -> dict:
     try:
         result = subprocess.run(
@@ -775,7 +782,6 @@ async def encode_video(input_path: str, output_path: str, msg: Message,
     if audio_map:
         base.extend(["-map", audio_map])
 
-    # Escalar a 720p máximo
     scale_filter = "scale=-2:'min(720,ih)'"
     final_vf = f"{scale_filter},{vf}" if vf else scale_filter
 
@@ -841,27 +847,20 @@ def _crunchy_cookie_path() -> str | None:
             return p
     return None
 
-
 def _crunchy_slug_title(url: str) -> str:
-    """Extract the human-readable episode title from a Crunchyroll URL."""
     slug = url.rstrip("/").split("/")[-1].split("?")[0]
     slug = unquote(slug).replace("-", " ").strip()
     return re.sub(r"\s+", " ", slug).strip().title()
 
-
 async def buscar_anime_metadata(query: str) -> dict:
-    """Look up public anime metadata without accessing protected video."""
     query = query.strip()
     if query.startswith(("http://", "https://")) and "crunchyroll.com/" in query.lower():
         query = _crunchy_slug_title(query)
     if not query:
         return {}
 
-    # Jikan provides public AniList/MyAnimeList metadata: aliases, Japanese
-    # title and romanized title. It does not provide video files or DRM data.
     headers = {"User-Agent": "AzunaBot/1.0 anime metadata lookup"}
     async with httpx.AsyncClient(timeout=20.0, headers=headers) as h:
-        # Jikan occasionally returns 502/504 while its upstream is busy.
         for attempt in range(3):
             try:
                 response = await h.get(
@@ -884,7 +883,6 @@ async def buscar_anime_metadata(query: str) -> dict:
                 else:
                     break
 
-        # Fallback independent public catalog. It only returns metadata.
         try:
             anilist_query = """
             query ($search: String) {
@@ -918,7 +916,6 @@ async def buscar_anime_metadata(query: str) -> dict:
         except (httpx.TimeoutException, httpx.HTTPError, ValueError):
             pass
 
-    # A catalog outage should not expose a raw 504 to the user.
     return {
         "title": query,
         "title_english": None,
@@ -928,7 +925,6 @@ async def buscar_anime_metadata(query: str) -> dict:
         "status": "No disponible (catálogo temporalmente fuera de servicio)",
         "_catalog_unavailable": True,
     }
-
 
 # ─── CRUNCHYROLL DOWNLOADER (1080p + Subtítulos) ──────────────────────────────
 async def procesar_crunchyroll(client: Client, message: Message, url: str,
@@ -1032,7 +1028,6 @@ async def procesar_crunchyroll(client: Client, message: Message, url: str,
     else:
         await safe_edit(msg, f"❌ Crunchyroll: No se pudo descargar el episodio.\n\n{BOT_SIGNATURE}")
 
-
 # ─── ENCODE DE ARCHIVO RECIBIDO ───────────────────────────────────────────────
 async def procesar_encode(client: Client, message: Message, target_msg: Message,
                           uname: str, uid: int, want_subs: bool = False,
@@ -1073,7 +1068,6 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
         sel_s = None
         spa_keywords = ["spa", "es", "spanish", "español", "latino", "castellano"]
 
-        # Buscar audio en español
         if tracks["audios"]:
             for a in tracks["audios"]:
                 if any(k in a["label"].lower() for k in spa_keywords):
@@ -1082,7 +1076,6 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
             if not sel_a:
                 sel_a = tracks["audios"][0]["idx"]
 
-        # Buscar subtítulos en español
         if tracks["subs"]:
             for s in tracks["subs"]:
                 if any(k in s["label"].lower() for k in spa_keywords):
@@ -1195,7 +1188,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
     video_title = ""
 
     try:
-        # 1. MEGA
         if is_mega:
             engine, mode, start_t = "direct", "#MEGA", time.time()
             await safe_edit(msg,
@@ -1206,7 +1198,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                 await download_progress(curr, total, msg, start_t, uname, task_id, engine, mode)
             path, video_title = await mega_download(url, DOWNLOAD_DIR, task_id, progress_cb=_mega_progress)
 
-        # 2. MEDIAFIRE
         elif is_mf:
             engine, mode = "httpx", "#MediaFire"
             async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as h:
@@ -1231,7 +1222,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             curr += len(chunk)
                             await download_progress(curr, total, msg, start_t, uname, task_id, engine, mode)
 
-        # 3. IMÁGENES DIRECTAS
         elif is_direct_img:
             engine, mode = "httpx", "#Image"
             filename = url.split("/")[-1].split("?")[0]
@@ -1252,7 +1242,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             curr += len(chunk)
                             await download_progress(curr, total, msg, start_t, uname, task_id, engine, mode)
 
-        # 4. TIKTOK
         elif is_tiktok:
             engine, mode, start_t = "TikWM API", "#TikTok", time.time()
             await safe_edit(msg,
@@ -1317,7 +1306,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
             else:
                 raise Exception("Fallo en la extracción del enlace de TikTok.")
 
-        # 5. SPOTIFY / SOUNDCLOUD
         elif is_spotify or is_soundcloud:
             engine, mode, start_t = "yt-dlp", "#AudioStream", time.time()
             loop = asyncio.get_running_loop()
@@ -1379,7 +1367,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
             else:
                 path = files[0]
 
-        # 6. REDES SOCIALES / VIDEO HOSTS
         elif is_social or is_video_host:
             engine  = "yt-dlp"
             _icon   = get_platform_icon(url)
@@ -1387,8 +1374,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
             start_t = time.time()
             loop    = asyncio.get_running_loop()
             captured = {"title": ""}
-            # web_creator y tv_embedded sirven DASH completo (4K/8K)
-            # ios/android se usan como respaldo si los anteriores son bloqueados
             _YT_CLIENTS = ["web_creator", "tv_embedded", "web", "ios", "android", "mweb"]
 
             def ydl_hook(d):
@@ -1475,7 +1460,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         opts = dict(base_opts)
                         opts["format"] = _FMT_SPLIT
                         opts["merge_output_format"] = "mp4"
-                        # "res" ordena de MAYOR a MENOR resolución (4K > 1080p > 720p …)
                         opts["format_sort"] = ["res", "fps", "vcodec:vp9.2:vp9:h265:h264",
                                                "ext:mp4:m4a", "tbr", "asr"]
                         opts["extractor_args"] = {"youtube": {"player_client": [_client],
@@ -1491,14 +1475,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             raise
                     raise last_error or Exception("YouTube bloqueó todos los clientes.")
                 elif "twitch.tv" in url:
-                    # ── Twitch: VOD / Clip / Live ─────────────────────────────
                     _twitch_base = dict(base_opts)
-                    # Para clips/VODs de Twitch (HLS), forzamos salida mp4 con postprocessor
                     _twitch_base["merge_output_format"] = "mp4"
                     _twitch_base["postprocessors"] = [
                         {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
                     ]
-                    # Clips: formato directo; VODs: preferir 1080p60
                     if "/clip/" in url or "clips.twitch.tv" in url:
                         _twitch_base["format"] = "best[height<=1080]/best"
                     else:
@@ -1506,7 +1487,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             "best[height<=1080][fps<=60]/best[height<=1080]/best"
                         )
 
-                    # Opciones con credenciales OAuth
                     _twitch_auth = dict(_twitch_base)
                     if TWITCH_USER and TWITCH_PASS:
                         _twitch_auth["username"] = TWITCH_USER
@@ -1515,12 +1495,10 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         _twitch_auth["username"] = ""
                         _twitch_auth["password"] = f"oauth:{TWITCH_OAUTH.lstrip('oauth:')}"
 
-                    # Con auth primero (VODs de subs), luego sin auth (VODs públicos/clips)
                     if TWITCH_USER or TWITCH_OAUTH:
                         _TWITCH_ATTEMPTS = [_twitch_auth, _twitch_base]
                     else:
                         _TWITCH_ATTEMPTS = [_twitch_base]
-                    # Último recurso: sin filtro de calidad
                     _free = dict(_twitch_base); _free["format"] = "best"
                     _TWITCH_ATTEMPTS.append(_free)
 
@@ -1569,13 +1547,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             if _is_no_video(_e2): return
                             raise _e2
 
-            # ─── INSTAGRAM (yt-dlp primario + embed fallback) ────────────────
             if "instagram.com" in url.lower():
                 _ig_title   = ""
                 _ig_done    = False
                 _ig_files: list[tuple[str, bool]] = []
 
-                # Ruta absoluta de cookies
                 _ig_bot_dir = os.path.dirname(os.path.abspath(__file__))
                 _ig_ck = None
                 for _ig_cp in [
@@ -1587,7 +1563,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     if os.path.exists(_ig_cp) and os.path.getsize(_ig_cp) > 0:
                         _ig_ck = _ig_cp; break
 
-                # ── Primario: yt-dlp (reels, fotos y carruseles) ──────────
                 _ig_cap = {"title": ""}
                 def _run_ig_ydl():
                     _ig_opts = {
@@ -1639,7 +1614,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     if _is_cancelled(_ie): raise ValueError("USER_CANCELLED")
                     print(f"[Instagram/yt-dlp] {type(_ie).__name__}: {_ie}")
 
-                # ── Fallback: embed scraper para fotos (si yt-dlp falló) ──
                 if not _ig_done:
                     _sc = re.search(r'/(?:p|reel|tv|reels)/([A-Za-z0-9_-]+)', url)
                     _shortcode = _sc.group(1) if _sc else None
@@ -1661,13 +1635,11 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                                         })
                                 if _re.status_code != 200: continue
                                 _raw2 = _re.text.replace("\\u0026", "&").replace("&amp;", "&")
-                                # Buscar vídeos del CDN
                                 for _vu in re.findall(
                                         r'(https://(?:video|scontent)[^\s"\'<>\\]+\.mp4[^\s"\'<>\\]*)',
                                         _raw2):
                                     if "cdninstagram" in _vu or "fbcdn" in _vu:
                                         _fb_media.append((_vu, True)); break
-                                # Buscar imágenes (descartar thumbnails 640x640)
                                 if not _fb_media:
                                     _imgs = re.findall(
                                         r'(https://scontent[^\s"\'<>\\]+\.(?:jpg|jpeg)[^\s"\'<>\\]*)',
@@ -1680,7 +1652,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                             except Exception as _ee:
                                 print(f"[Instagram/embed] {_emb_path}: {_ee}")
 
-                    # Descargar medias del fallback
                     _dl_ua2 = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
                     for _idx, (_murl, _is_vid) in enumerate(_fb_media):
@@ -1701,7 +1672,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                         except Exception as _de:
                             print(f"[Instagram/embed/dl] {_de}")
 
-                # ── Enviar archivos ───────────────────────────────────────
                 if _ig_done and _ig_files:
                     from pyrogram.types import InputMediaPhoto, InputMediaVideo
                     if len(_ig_files) == 1:
@@ -1736,9 +1706,8 @@ async def procesar_descarga(client: Client, message: Message, url: str,
                     for _fp2, _ in _ig_files:
                         try: os.remove(_fp2)
                         except Exception: pass
-                    return  # ← Instagram manejó todo
+                    return  
 
-            # ─── yt-dlp (Instagram sin API, YouTube, Twitch, etc.) ───────────
             await safe_edit(msg,
                 f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
                 f"┊ Status   : Extracting...\n"
@@ -1748,7 +1717,6 @@ async def procesar_descarga(client: Client, message: Message, url: str,
 
             files = sorted(glob.glob(f"{DOWNLOAD_DIR}{task_id}_*"), key=os.path.getsize)
 
-            # FALLBACK CAROUSEL / OG:IMAGE
             if not files:
                 await safe_edit(msg,
                     f"╭ Task By → 「{uname}」\n┊ Status   : Buscando Medios de Respaldo...\n"
@@ -2036,9 +2004,7 @@ async def procesar_descarga(client: Client, message: Message, url: str,
         if sub_path and os.path.exists(sub_path):
             try: os.remove(sub_path)
             except: pass
-
-
-# ─── AUDIO ────────────────────────────────────────────────────────────────────
+            # ─── AUDIO ────────────────────────────────────────────────────────────────────
 async def procesar_audio(client: Client, message: Message, url: str, uname: str, task_id: str):
     msg = await message.reply_text(
         f"╭ Task By → 「{uname}」\n┊ 🎵 Iniciando descarga de audio...\n"
@@ -2286,7 +2252,6 @@ async def procesar_playlist(client: Client, message: Message, url: str, uname: s
 # ─── PDF / DOCUMENTOS ─────────────────────────────────────────────────────────
 
 def _parse_gdrive_id(url: str) -> str | None:
-    """Extrae el file-ID de un link de Google Drive en cualquier formato."""
     for pat in [
         r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)",
         r"drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)",
@@ -2298,7 +2263,6 @@ def _parse_gdrive_id(url: str) -> str | None:
     return None
 
 def _is_pdf_url(url: str) -> bool:
-    """True si la URL apunta directamente a un PDF."""
     return url.lower().split("?")[0].endswith(".pdf")
 
 def _is_gdrive_url(url: str) -> bool:
@@ -2306,7 +2270,6 @@ def _is_gdrive_url(url: str) -> bool:
 
 async def procesar_pdf(client: Client, message: Message, url: str,
                        uname: str, uid: int, queue_label: str = ""):
-    """Descarga y envía un PDF/documento preservando calidad y orden de páginas."""
     task_id = f"{uid}_{int(time.time())}"
     active_tasks[task_id] = "RUNNING"
     _current = asyncio.current_task()
@@ -2316,7 +2279,6 @@ async def procesar_pdf(client: Client, message: Message, url: str,
     is_mf     = "mediafire.com" in url
     is_gdrive = _is_gdrive_url(url)
 
-    icon = get_platform_icon(url)
     msg = await message.reply_text(
         f"╭ Task By → 「{uname}」\n"
         f"┊ [{make_bar(0)}] 0.00%\n"
@@ -2348,7 +2310,6 @@ async def procesar_pdf(client: Client, message: Message, url: str,
                 f"╭ Task By → 「{uname}」\n┊ [{make_bar(0)}] 0.00%\n"
                 f"┊ Status   : Conectando a Google Drive...\n"
                 f"╰ Mode     : #GDrive-PDF\n\n{BOT_SIGNATURE}")
-            # Google Drive direct-download URL (bypasses preview page)
             dl_url = f"https://drive.usercontent.google.com/download?id={fid}&export=download&confirm=t"
             async with httpx.AsyncClient(
                 timeout=None, follow_redirects=True,
@@ -2356,7 +2317,6 @@ async def procesar_pdf(client: Client, message: Message, url: str,
             ) as h:
                 async with h.stream("GET", dl_url) as resp:
                     resp.raise_for_status()
-                    # Intentar obtener nombre de Content-Disposition
                     cd = resp.headers.get("content-disposition", "")
                     fn_match = re.search(r'filename[*]?=["\']?(?:UTF-8\'\')?([^"\';\r\n]+)', cd, re.IGNORECASE)
                     filename = fn_match.group(1).strip().strip('"\'') if fn_match else f"gdrive_{fid}.pdf"
@@ -2413,7 +2373,6 @@ async def procesar_pdf(client: Client, message: Message, url: str,
             ) as h:
                 async with h.stream("GET", url) as resp:
                     resp.raise_for_status()
-                    # Verificar que sea PDF/documento
                     ct = resp.headers.get("content-type", "").lower()
                     if "text/html" in ct and not _is_pdf_url(url):
                         raise Exception(
@@ -2440,7 +2399,7 @@ async def procesar_pdf(client: Client, message: Message, url: str,
                             curr += len(chunk)
                             await download_progress(curr, total, msg, start_t, uname, task_id, "HTTP", "#DirectPDF")
 
-        # ── ENVIAR COMO DOCUMENTO (sin compresión, sin conversión) ────────────
+        # ── ENVIAR COMO DOCUMENTO ──────────────────────────────────────────────
         if not path or not os.path.exists(path):
             raise Exception("El archivo no se descargó correctamente.")
 
@@ -2462,7 +2421,7 @@ async def procesar_pdf(client: Client, message: Message, url: str,
         await client.send_document(
             chat_id=message.chat.id,
             document=path,
-            file_name=fname,          # preserva nombre original
+            file_name=fname,
             caption=caption,
             parse_mode=enums.ParseMode.HTML,
             progress=upload_progress,
@@ -2506,21 +2465,19 @@ _COMIC_DOMAINS = (
 )
 
 def _is_comic_page_url(url: str) -> bool:
-    """Sites whose pages contain an ordered gallery rather than a video URL."""
     low = url.lower()
     return low.startswith(("http://", "https://")) and any(d in low for d in _COMIC_DOMAINS)
 
-# Selectores CSS en orden de prioridad para encontrar imágenes del cómic
 _COMIC_SELECTORS = [
-    "div.pp-gallery-view",        # ToonX gallery (only reader pages)
-    "div.pp-comic-content",       # toonx.net
-    "div.reading-content",        # Madara WP manga theme
+    "div.pp-gallery-view",        
+    "div.pp-comic-content",       
+    "div.reading-content",        
     "div.chapter-content",
     "div#chapter-images",
     "div.comic-reading",
     "div.comic-images",
     "div#comic",
-    "div.entry-content",          # WordPress genérico
+    "div.entry-content",          
     "div.post-content",
     "div.td-post-content",
     "article.post",
@@ -2529,7 +2486,6 @@ _COMIC_SELECTORS = [
     "main",
 ]
 
-# Patrones de URLs que indican imágenes de la UI (no del cómic)
 _UI_IMG_PATTERNS = re.compile(
     r"(logo|banner|icon|avatar|header|footer|sidebar|widget|"
     r"advert|sponsor|social|share|button|pixel|1x1|blank|"
@@ -2538,10 +2494,6 @@ _UI_IMG_PATTERNS = re.compile(
 )
 
 async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
-    """
-    Descarga la página y extrae URLs de imágenes del cómic en orden.
-    Retorna (lista_de_urls, titulo_del_cómic).
-    """
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -2555,7 +2507,6 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
         r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
 
-    # Título de la página
     title = ""
     og_title = soup.find("meta", property="og:title")
     if og_title and og_title.get("content"):
@@ -2563,7 +2514,6 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
     elif soup.title:
         title = soup.title.get_text(strip=True)
 
-    # Probar selectores en orden
     images: list[str] = []
     for sel in _COMIC_SELECTORS:
         container = soup.select_one(sel)
@@ -2582,10 +2532,8 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
             src = src.strip()
             if not src or not src.startswith("http"):
                 continue
-            # Excluir imágenes de la UI
             if _UI_IMG_PATTERNS.search(src):
                 continue
-            # Excluir imágenes muy pequeñas declaradas en el HTML
             w = img.get("width") or "0"
             h_ = img.get("height") or "0"
             try:
@@ -2597,9 +2545,8 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
 
         if candidates:
             images = candidates
-            break  # Usamos el primer selector que da resultados
+            break
 
-    # Si ningún selector funciona, buscar imágenes de wp-content/uploads en toda la página
     if not images:
         all_imgs = soup.find_all("img")
         page_host = page_url.split("/")[2]
@@ -2613,7 +2560,6 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
                 if not _UI_IMG_PATTERNS.search(src):
                     images.append(src)
 
-    # Deduplicar preservando orden
     seen: set[str] = set()
     unique: list[str] = []
     for u in images:
@@ -2622,13 +2568,7 @@ async def _scrape_comic_images(page_url: str) -> tuple[list[str], str]:
             unique.append(u)
     return unique, title
 
-
 async def _images_to_pdf(image_files: list[str], output_path: str) -> None:
-    """Create an ordered PDF without changing the source page order.
-
-    ImageMagick is already part of the bot runtime (and the Docker image).
-    The quality setting avoids unnecessary JPEG recompression where possible.
-    """
     if not image_files:
         raise ValueError("No hay páginas para crear el PDF.")
     proc = await asyncio.create_subprocess_exec(
@@ -2645,13 +2585,12 @@ async def _images_to_pdf(image_files: list[str], output_path: str) -> None:
 async def procesar_comic(client: Client, message: Message, url: str,
                          uname: str, uid: int, msg: Message | None = None,
                          as_pdf: bool = False):
-    """Scrape an ordered comic/gallery and send it as images or one PDF."""
     task_id = f"{uid}_{int(time.time())}"
     active_tasks[task_id] = "RUNNING"
     _current = asyncio.current_task()
     if _current: _task_handles[task_id] = _current
 
-    owned_msg = msg is None  # si nosotros creamos el mensaje, nosotros lo borramos
+    owned_msg = msg is None
     if msg is None:
         msg = await message.reply_text(
             f"╭ Task By → 「{uname}」\n"
@@ -2680,7 +2619,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
             f"┊ ⬇️ Descargando...\n"
             f"╰ Mode     : #ComicScraper\n\n{BOT_SIGNATURE}")
 
-        # Descargar todas las imágenes manteniendo el orden
         sem = asyncio.Semaphore(4)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -2696,8 +2634,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
                     ext = ".jpg"
                 fpath = os.path.join(DOWNLOAD_DIR, f"{task_id}_comic_{idx:04d}{ext}")
                 try:
-                    # Algunos sitios publican la portada en un CDN con
-                    # Cloudflare, pero mantienen un espejo con el mismo path.
                     candidates = [img_url]
                     if "cdn.javmiku.com/" in img_url:
                         candidates.append(img_url.replace("cdn.javmiku.com/", "cdn.javnorth.com/"))
@@ -2724,7 +2660,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
         tasks_dl = [_dl_one(i, u) for i, u in enumerate(img_urls)]
         results  = await asyncio.gather(*tasks_dl)
 
-        # Filtrar fallos y ordenar por índice de nombre
         for r in results:
             if r and os.path.exists(r):
                 tmp_files.append(r)
@@ -2736,7 +2671,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
         downloaded = len(tmp_files)
         title_short = page_title[:60] if page_title else url.split("/")[-2]
 
-        # Convertir webp → jpg para Telegram (send_photo no acepta webp a veces)
         from pyrogram.types import InputMediaPhoto, InputMediaDocument
         ready: list[str] = []
         for fpath in tmp_files:
@@ -2786,7 +2720,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
                 parse_mode=enums.ParseMode.HTML,
             )
         else:
-            # Enviar en álbumes de hasta 10 fotos
             album_caption = f"📖 <b>{title_short}</b>\n🖼️ {downloaded} páginas\n\n{BOT_SIGNATURE}"
             batch_num     = 0
             batches       = [ready[i:i+10] for i in range(0, len(ready), 10)]
@@ -2811,7 +2744,6 @@ async def procesar_comic(client: Client, message: Message, url: str,
                 try:
                     await client.send_media_group(message.chat.id, media_group)
                 except Exception:
-                    # Si falla el álbum, enviar una por una como documento
                     for fi, fpath in enumerate(batch):
                         cap = album_caption if batch_num == 1 and fi == 0 else None
                         try:
@@ -3006,7 +2938,6 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         await upload_smart_file(client, message, encoded_path, msg, uname, task_id, title=input_name)
         _stats["downloads"] += 1
         
-        # Eliminar el panel de carga
         try: await msg.delete()
         except Exception: pass
 
@@ -3048,7 +2979,7 @@ async def _run_torrent_download(client, message, msg, uname, task_id, source, dl
                     await safe_edit(msg,
                         f"╭ Task By → 「{uname}」\n┊ 🧲 Descargando torrent...\n"
                         f"┊ 📦 Descargado : {get_readable_size(total_dl)}\n"
-                        f"┊ ⏱️ Tiempo     : {get_readable_time(int(elapsed))}\n"
+                        f"┊ ⏱️ Tiempo      : {get_readable_time(int(elapsed))}\n"
                         f"┊ ⚠️ /cancel para detener\n"
                         f"╰ Mode     : #TorrentMode\n\n{BOT_SIGNATURE}")
                     last_edit = time.time()
@@ -3125,9 +3056,8 @@ async def procesar_torrent(client: Client, message: Message, source: str,
     finally:
         active_tasks.pop(task_id, None)
         _torrent_sessions.pop(str(uid), None)
-        shutil.rmtree(meta_dir, ignore_errors=True)
-
-# ─── COLA DE TRABAJO ──────────────────────────────────────────────────────────
+        shutil.rmtree(meta_dir, ignore_errors=True) 
+        # ─── COLA DE TRABAJO ──────────────────────────────────────────────────────────
 async def queue_worker():
     print("[worker] Cola iniciada, esperando tareas...")
     while True:
@@ -3146,10 +3076,9 @@ async def queue_worker():
             download_queue.task_done()
 
 # ─── MÚSICA: BÚSQUEDA Y DESCARGA ──────────────────────────────────────────────
-_music_searches: dict[str, list] = {}   # key=f"{uid}_{msg_id}" → lista de hits
+_music_searches: dict[str, list] = {}
 
 async def _yt_search(query: str, n: int = 5) -> list[dict]:
-    """Busca en YouTube y retorna hasta n resultados (sin descargar)."""
     def _do():
         opts = {"quiet": True, "no_warnings": True,
                 "extract_flat": True, "skip_download": True}
@@ -3171,12 +3100,10 @@ async def _yt_search(query: str, n: int = 5) -> list[dict]:
     return await asyncio.to_thread(_do)
 
 def _fmt_dur(secs) -> str:
-    """Formatea segundos → mm:ss o hh:mm:ss."""
     if not secs: return "?:??"
     secs = int(secs)
     h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
-
 
 # ─── CLIENTE BOT ──────────────────────────────────────────────────────────────
 bot = Client("bot_session", api_id=API_ID, api_hash=API_HASH,
@@ -3186,7 +3113,6 @@ bot = Client("bot_session", api_id=API_ID, api_hash=API_HASH,
 
 @bot.on_message(filters.command(["a", "buscaranime", "animeinfo", "anime"]))
 async def cmd_buscar_anime(client: Client, message: Message):
-    """Show legal/public anime metadata for a title or Crunchyroll URL."""
     if not is_auth(message.from_user.id):
         return
     parts = message.text.strip().split(maxsplit=1)
@@ -3235,10 +3161,8 @@ async def cmd_buscar_anime(client: Client, message: Message):
     except Exception as exc:
         await safe_edit(msg, f"❌ No se pudo consultar la información: {str(exc)[:180]}\n\n{BOT_SIGNATURE}")
 
-# ── Música: /play, /playv, /search ──────────────────────────────────────────
 @bot.on_message(filters.command(["play", "Play"]))
 async def cmd_play(client: Client, message: Message):
-    """/play <canción/artista> — Descarga el primer resultado de YouTube como MP3."""
     if not is_auth(message.from_user.id): return
     uid   = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
@@ -3247,10 +3171,6 @@ async def cmd_play(client: Client, message: Message):
         await message.reply_text(
             f"╭─ 🎵 /play — Descargar canción como MP3\n┊\n"
             f"┊ Uso: /play <nombre canción o artista>\n┊\n"
-            f"┊ Ejemplos:\n"
-            f"┊   /play Blinding Lights\n"
-            f"┊   /play Michael Jackson Beat It\n"
-            f"┊   /play Shakira Waka Waka\n┊\n"
             f"╰─ Descarga el top resultado de YouTube como MP3\n\n{BOT_SIGNATURE}"
         )
         return
@@ -3264,9 +3184,7 @@ async def cmd_play(client: Client, message: Message):
     )
     hits = await _yt_search(query, n=1)
     if not hits:
-        await msg.edit_text(
-            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
-            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        await msg.edit_text(f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados.\n╰──────────────\n\n{BOT_SIGNATURE}")
         return
     await msg.delete()
     asyncio.create_task(procesar_audio(client, message, hits[0]["url"], uname, task_id))
@@ -3274,7 +3192,6 @@ async def cmd_play(client: Client, message: Message):
 
 @bot.on_message(filters.command(["playv", "Playv", "playvideo", "pv"]))
 async def cmd_playv(client: Client, message: Message):
-    """/playv <canción/artista> — Descarga el primer resultado como video MP4."""
     if not is_auth(message.from_user.id): return
     uid   = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
@@ -3283,9 +3200,6 @@ async def cmd_playv(client: Client, message: Message):
         await message.reply_text(
             f"╭─ 🎬 /playv — Descargar video de canción\n┊\n"
             f"┊ Uso: /playv <nombre canción o artista>\n┊\n"
-            f"┊ Ejemplos:\n"
-            f"┊   /playv Bohemian Rhapsody\n"
-            f"┊   /playv Bad Bunny Tití Me Preguntó\n┊\n"
             f"╰─ Descarga el top resultado de YouTube como video\n\n{BOT_SIGNATURE}"
         )
         return
@@ -3299,18 +3213,14 @@ async def cmd_playv(client: Client, message: Message):
     )
     hits = await _yt_search(query, n=1)
     if not hits:
-        await msg.edit_text(
-            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
-            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        await msg.edit_text(f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados.\n╰──────────────\n\n{BOT_SIGNATURE}")
         return
     await msg.delete()
     queue_label = f"Cola #{download_queue.qsize() + 1}"
     await download_queue.put((client, message, hits[0]["url"], uname, uid, queue_label, False))
 
-
 @bot.on_message(filters.command(["search", "buscar", "musica", "música", "sm"]))
 async def cmd_search(client: Client, message: Message):
-    """/search <query> — Busca en YouTube y muestra 5 resultados con botones."""
     if not is_auth(message.from_user.id): return
     uid   = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
@@ -3319,12 +3229,6 @@ async def cmd_search(client: Client, message: Message):
         await message.reply_text(
             f"╭─ 🔍 /search — Buscar música en YouTube\n┊\n"
             f"┊ Uso: /search <nombre canción o artista>\n┊\n"
-            f"┊ Ejemplos:\n"
-            f"┊   /search Shakira\n"
-            f"┊   /search Despacito Luis Fonsi\n┊\n"
-            f"┊ Muestra 5 resultados con botones:\n"
-            f"┊   🎵 = descargar MP3\n"
-            f"┊   🎬 = descargar video\n"
             f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
         )
         return
@@ -3337,9 +3241,7 @@ async def cmd_search(client: Client, message: Message):
     )
     hits = await _yt_search(query, n=5)
     if not hits:
-        await msg.edit_text(
-            f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados para: {query[:50]}\n"
-            f"╰──────────────\n\n{BOT_SIGNATURE}")
+        await msg.edit_text(f"╭ Task By → 「{uname}」\n┊ ❌ Sin resultados.\n╰──────────────\n\n{BOT_SIGNATURE}")
         return
 
     from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -3369,10 +3271,8 @@ async def cmd_search(client: Client, message: Message):
         reply_markup=InlineKeyboardMarkup(rows)
     )
 
-
 @bot.on_message(filters.command(["pdf", "doc", "gdrive"]))
 async def cmd_pdf(client: Client, message: Message):
-    """/pdf <url> — Descarga un documento o convierte una galería en PDF."""
     if not is_auth(message.from_user.id): return
     uid   = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
@@ -3381,19 +3281,16 @@ async def cmd_pdf(client: Client, message: Message):
         await message.reply_text(
             f"╭─ 📕 /pdf — Descargar PDF o documento\n┊\n"
             f"┊ Uso: /pdf <url del archivo o galería>\n┊\n"
-            f"┊ Soporta:\n"
-            f"┊   • Links directos (.pdf, .epub, .cbr, etc.)\n"
-            f"┊   • Google Drive (drive.google.com/...)\n"
-            f"┊   • MEGA (mega.nz/file/...)\n"
-            f"┊   • MediaFire (mediafire.com/...)\n┊\n"
-            f"┊   • Cómics/galerías → PDF en orden\n┊\n"
-            f"┊ 💡 También puedes enviar el link directo\n"
-            f"┊    sin comando — si termina en .pdf se\n"
-            f"┊    descargará automáticamente.\n"
             f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
         )
         return
     url = parts[1].strip()
+    
+    req_plan = get_required_plan_for_url(url)
+    if get_user_plan(uid) < req_plan:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nEste documento o galería requiere el **Plan {req_plan}**.\n\n{BOT_SIGNATURE}")
+        return
+
     if _is_comic_page_url(url):
         asyncio.create_task(procesar_comic(client, message, url, uname, uid, as_pdf=True))
     else:
@@ -3402,27 +3299,26 @@ async def cmd_pdf(client: Client, message: Message):
 
 @bot.on_message(filters.command(["comicpdf", "mangapdf"]))
 async def cmd_comic_pdf(client: Client, message: Message):
-    """Download a comic/gallery as a single ordered PDF."""
-    if not is_auth(message.from_user.id):
+    uid = message.from_user.id
+    if not is_auth(uid): return
+    
+    if get_user_plan(uid) < 15:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nLa descarga de galerías nopol y cómics requiere el **Plan 15**.\n\n{BOT_SIGNATURE}")
         return
+
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip().startswith(("http://", "https://")):
         await message.reply_text(
             f"╭─ 📕 /comicpdf — Cómic en un solo PDF\n┊\n"
             f"┊ Uso: /comicpdf <URL de la página>\n┊\n"
-            f"┊ Descarga las páginas en su orden original\n"
-            f"┊ y las envía como un único documento PDF.\n"
             f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
         )
         return
-    uid = message.from_user.id
     uname = message.from_user.username or message.from_user.first_name or str(uid)
     await procesar_comic(client, message, parts[1].strip(), uname, uid, as_pdf=True)
 
-
 @bot.on_callback_query(filters.regex(r"^mplay:(.+):(\d+):(a|v)$"))
 async def cb_music_play(client: Client, cb: CallbackQuery):
-    """Callback al pulsar 🎵 o 🎬 en /search."""
     if not is_auth(cb.from_user.id):
         await cb.answer("⛔ No autorizado.", show_alert=True); return
     uid        = cb.from_user.id
@@ -3449,25 +3345,25 @@ async def cb_music_play(client: Client, cb: CallbackQuery):
         queue_label = f"Cola #{download_queue.qsize() + 1}"
         await download_queue.put((client, ref, url, uname, uid, queue_label, False))
 
-
 @bot.on_message(filters.command(["comic", "comicdl", "manga"]))
 async def cmd_comic(client: Client, message: Message):
-    """Download an ordered comic/gallery page from a supported site."""
-    if not is_auth(message.from_user.id):
+    uid = message.from_user.id
+    if not is_auth(uid): return
+    
+    if get_user_plan(uid) < 15:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nLa descarga de galerías nopol requiere el **Plan 15**.\n\n{BOT_SIGNATURE}")
         return
+
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].startswith(("http://", "https://")):
         await message.reply_text(
             f"╭─ 📖 /comic — Descargar cómic o galería\n┊\n"
             f"┊ Uso: /comic <URL de la página>\n┊\n"
-            f"┊ Compatible con galerías de ToonX y JAV Guru.\n"
-            f"┊ Las páginas se mantienen en el orden original.\n"
             f"╰─────────────────────────\n\n{BOT_SIGNATURE}"
         )
         return
-    uname = message.from_user.username or message.from_user.first_name or str(message.from_user.id)
-    await procesar_comic(client, message, parts[1].strip(), uname, message.from_user.id)
-
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+    await procesar_comic(client, message, parts[1].strip(), uname, uid)
 
 @bot.on_message(filters.command("coms"))
 async def cmd_coms(client: Client, message: Message):
@@ -3475,45 +3371,35 @@ async def cmd_coms(client: Client, message: Message):
     await message.reply_text(
         "📋 <b>Comandos disponibles</b>\n\n"
         "🎵 <b>Música (sin necesidad de link):</b>\n"
-        "• /play &lt;canción/artista&gt; — Busca y descarga MP3 del top resultado\n"
-        "• /playv &lt;canción/artista&gt; — Busca y descarga el video del top resultado\n"
-        "• /search &lt;canción/artista&gt; — Muestra 5 resultados con botones\n"
-        "    🎵 = descargar MP3   🎬 = descargar video\n\n"
+        "• /play &lt;canción/artista&gt; — Busca y descarga MP3\n"
+        "• /playv &lt;canción/artista&gt; — Busca y descarga el video\n"
+        "• /search &lt;canción/artista&gt; — Muestra 5 resultados\n\n"
         "🔎 <b>Anime:</b>\n"
-        "• /a &lt;nombre o URL de Crunchyroll&gt; — Consulta títulos y alias\n\n"
+        "• /a &lt;nombre/url&gt; — Consulta títulos y alias\n\n"
         "📕 <b>PDF y documentos:</b>\n"
-        "• /pdf &lt;url&gt; — Descarga PDF sin pérdida de calidad\n"
-        "    Soporta: links directos (.pdf), Google Drive,\n"
-        "    MEGA y MediaFire\n"
-        "• Envía un link .pdf directamente — se descarga solo\n\n"
+        "• /pdf &lt;url&gt; — Descarga PDF sin pérdida de calidad\n\n"
         "📖 <b>Cómics y galerías:</b>\n"
         "• /comic &lt;url&gt; — Descarga páginas en orden\n"
-        "• /comicpdf &lt;url&gt; — Descarga todo como un único PDF\n"
-        "• /pdf &lt;url de cómic&gt; — También crea el PDF\n"
-        "• También puedes enviar directamente un link de ToonX/JAV Guru\n\n"
+        "• /comicpdf &lt;url&gt; — Descarga todo como un único PDF\n\n"
         "🔗 <b>Descarga por link:</b>\n"
-        "• Envía cualquier link — YouTube, TikTok, Instagram, etc.\n"
-        "• /audio &lt;link&gt; — Extraer y descargar audio MP3\n"
-        "• /playlist &lt;link&gt; — Descargar playlist completa como MP3\n\n"
+        "• Envía cualquier link directo al chat\n"
+        "• /audio &lt;link&gt; — Extraer audio MP3\n"
+        "• /playlist &lt;link&gt; — Descargar playlist completa\n\n"
         "🛠 <b>Herramientas:</b>\n"
-        "• /encode &lt;magnet&gt; — Descargar torrent y convertir a MP4\n"
-        "• /quality — Cambiar calidad de descarga (4K/1080p/720p/480p)\n"
-        "• /queue — Ver cola de descargas activa\n"
-        "• /cancel — Cancelar descarga activa\n"
-        "• /ping — Ver latencia\n"
-        "• /start — Bienvenida del bot\n\n"
-        "🔐 <b>Solo administradores:</b>\n"
-        "• /id — Autorizar usuario (responde su mensaje)\n"
-        "• /addid &lt;ID&gt; — Autorizar usuario por ID directo\n"
-        "• /rmid &lt;ID&gt; — Quitar autorización por ID\n"
-        "• /users — Ver usuarios autorizados\n"
-        "• /stat — Ver estadísticas del servidor\n"
-        "• /reset — Cancelar todo y limpiar\n"
-        "• /admin — Dar rango admin\n"
-        "• /remadmin — Quitar rango admin\n"
-        "• /cancelarID — Quitar autorización (responde su mensaje)\n"
-        "• /getcode — Obtener código fuente en .txt\n"
-        "• /coms — Ver esta lista\n\n"
+        "• /encode &lt;magnet/video&gt; — Descargar torrent / Convertir MP4\n"
+        "• /quality — Cambiar calidad (Admins)\n"
+        "• /queue — Ver cola de descargas\n"
+        "• /cancel — Cancelar todo\n"
+        "• /ping — Ver latencia\n\n"
+        "🔐 <b>Administradores:</b>\n"
+        "• /id — Autorizar usuario (Plan 5 por defecto)\n"
+        "• /addid &lt;ID&gt; — Autorizar directo (Plan 5)\n"
+        "• /setplan &lt;ID&gt; &lt;5|10|15&gt; — Modificar membresía\n"
+        "• /rmid &lt;ID&gt; — Quitar acceso\n"
+        "• /users — Ver usuarios y planes\n"
+        "• /stat — Ver uso del sistema\n"
+        "• /reset — Limpiar memoria\n"
+        "• /admin & /remadmin — Rango de Admins\n\n"
         f"{BOT_SIGNATURE}",
         parse_mode=enums.ParseMode.HTML
     )
@@ -3523,14 +3409,14 @@ async def cmd_start(client: Client, message: Message):
     uid  = message.from_user.id
     name = message.from_user.first_name
     auth_status = "✅ Autorizado" if is_auth(uid) else "⛔ No Autorizado"
+    plan_text = f"💎 Plan: **{get_user_plan(uid)}**" if is_auth(uid) else ""
     await message.reply_text(
         f"🚀 ¡Hola, {name}!\n\n"
-        f"Soy un bot descargador de medios. Envíame un enlace de:\n"
-        f"YouTube • TikTok • Instagram • Twitter/X • Facebook\n"
-        f"Pinterest • Mega.nz • Mediafire • y más 💾\n\n"
+        f"Soy un bot descargador de medios con sistema de planes.\n\n"
         f"🆔 **Tu ID:** `{uid}`\n"
-        f"🔐 **Estado:** {auth_status}\n\n"
-        f"*(Si no estás autorizado, pídele al admin tu ID)*\n\n"
+        f"🔐 **Estado:** {auth_status}\n"
+        f"{plan_text}\n\n"
+        f"*(Si no estás autorizado, envíale tu ID al Admin)*\n\n"
         f"{BOT_SIGNATURE}"
     )
 
@@ -3540,8 +3426,7 @@ async def cmd_getcode(client: Client, message: Message):
     code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
     try:
         await message.reply_document(
-            document=code_path,
-            file_name="main.py.txt",
+            document=code_path, file_name="main.py.txt",
             caption=f"📄 Código fuente del bot\n\n{BOT_SIGNATURE}"
         )
     except Exception as e:
@@ -3552,10 +3437,8 @@ async def cmd_stat(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
     uptime   = get_readable_time(time.time() - start_time)
     sys_ram  = psutil.virtual_memory()
-    try:
-        proc_ram = psutil.Process().memory_info().rss
-    except Exception:
-        proc_ram = 0
+    try: proc_ram = psutil.Process().memory_info().rss
+    except Exception: proc_ram = 0
     disk     = psutil.disk_usage("/tmp")
     server   = platform.node()
     plat     = platform.system().lower() + " " + platform.release()
@@ -3572,7 +3455,7 @@ async def cmd_stat(client: Client, message: Message):
         f"┊ 🕐 Time on    : {uptime}\n"
         f"┊ 🧠 RAM        : {get_readable_size(proc_ram)} (sys {get_readable_size(sys_ram.used)} / {get_readable_size(sys_ram.total)})\n"
         f"┊ 💾 Storage    : {get_readable_size(disk.used)} / {get_readable_size(disk.total)}\n"
-        f"┊ 🖥️ Server     : {server}\n"
+        f"┊ 🖥️ Server      : {server}\n"
         f"┊ ⚙️ Platform   : {plat}\n"
         f"┊ 🔧 CPU        : {cpu_model} x{cpu_count}\n"
         f"┊ 🎬 Procesados : {_stats['downloads']}\n"
@@ -3592,10 +3475,10 @@ async def cmd_quality(client: Client, message: Message):
     cur = _max_quality
     cur_label = _labels.get(cur, f"{cur}p")
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔵 4K (2160p)",       callback_data="quality:2160"),
-         InlineKeyboardButton("🟢 1080p",            callback_data="quality:1080")],
-        [InlineKeyboardButton("🟡 720p",             callback_data="quality:720"),
-         InlineKeyboardButton("🟠 480p",             callback_data="quality:480")],
+        [InlineKeyboardButton("🔵 4K (2160p)",        callback_data="quality:2160"),
+         InlineKeyboardButton("🟢 1080p",             callback_data="quality:1080")],
+        [InlineKeyboardButton("🟡 720p",              callback_data="quality:720"),
+         InlineKeyboardButton("🟠 480p",              callback_data="quality:480")],
         [InlineKeyboardButton("⚪ Mejor disponible", callback_data="quality:0")],
     ])
     await message.reply_text(
@@ -3637,35 +3520,41 @@ async def cmd_ping(client: Client, message: Message):
 
 @bot.on_message(filters.command(["audio", "Audio", "mp3"]))
 async def cmd_audio(client: Client, message: Message):
-    if not is_auth(message.from_user.id): return
-    uid   = message.from_user.id
+    uid = message.from_user.id
+    if not is_auth(uid): return
     uname = message.from_user.username or message.from_user.first_name or str(uid)
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].startswith("http"):
-        await message.reply_text(
-            f"╭─ Uso correcto:\n┊ /audio <enlace>\n┊\n"
-            f"┊ Ejemplo:\n┊ /audio https://youtu.be/...\n"
-            f"╰─ Soporta YouTube, SoundCloud y más\n\n{BOT_SIGNATURE}"
-        )
+        await message.reply_text(f"╭─ Uso correcto:\n┊ /audio <enlace>\n╰─ Soporta YouTube, SoundCloud y más\n\n{BOT_SIGNATURE}")
         return
+        
+    url = parts[1].strip()
+    req_plan = get_required_plan_for_url(url)
+    if get_user_plan(uid) < req_plan:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nEste enlace requiere el **Plan {req_plan}**.\n\n{BOT_SIGNATURE}")
+        return
+        
     task_id = f"{uid}_{int(time.time())}"
-    asyncio.create_task(procesar_audio(client, message, parts[1].strip(), uname, task_id))
+    asyncio.create_task(procesar_audio(client, message, url, uname, task_id))
 
 @bot.on_message(filters.command(["playlist", "Playlist", "pl"]))
 async def cmd_playlist(client: Client, message: Message):
-    if not is_auth(message.from_user.id): return
-    uid   = message.from_user.id
+    uid = message.from_user.id
+    if not is_auth(uid): return
     uname = message.from_user.username or message.from_user.first_name or str(uid)
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2 or not parts[1].startswith("http"):
-        await message.reply_text(
-            f"╭─ Uso correcto:\n┊ /playlist <enlace>\n┊\n"
-            f"┊ Ejemplo:\n┊ /playlist https://youtube.com/playlist?list=...\n"
-            f"╰─ Máx. {MAX_PLAYLIST_TRACKS} pistas\n\n{BOT_SIGNATURE}"
-        )
+        await message.reply_text(f"╭─ Uso correcto:\n┊ /playlist <enlace>\n╰─ Máx. {MAX_PLAYLIST_TRACKS} pistas\n\n{BOT_SIGNATURE}")
         return
+        
+    url = parts[1].strip()
+    req_plan = get_required_plan_for_url(url)
+    if get_user_plan(uid) < req_plan:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nEste enlace requiere el **Plan {req_plan}**.\n\n{BOT_SIGNATURE}")
+        return
+        
     task_id = f"{uid}_{int(time.time())}"
-    asyncio.create_task(procesar_playlist(client, message, parts[1].strip(), uname, task_id))
+    asyncio.create_task(procesar_playlist(client, message, url, uname, task_id))
 
 @bot.on_message(filters.command(["queue", "Queue", "cola"]))
 async def cmd_queue(client: Client, message: Message):
@@ -3681,19 +3570,21 @@ async def cmd_queue(client: Client, message: Message):
 
 @bot.on_message(filters.command(["encode", "Encode", "torrent"]))
 async def cmd_encode(client: Client, message: Message):
-    if not is_auth(message.from_user.id): return
-    uid       = message.from_user.id
-    uname     = message.from_user.username or message.from_user.first_name or str(uid)
+    uid = message.from_user.id
+    if not is_auth(uid): return
+    
+    if get_user_plan(uid) < 15:
+        await message.reply_text(f"⛔ **Acceso Restringido**\nEl procesamiento de Torrents y conversiones avanzadas requiere el **Plan 15**.\n\n{BOT_SIGNATURE}")
+        return
 
-    # Respondiendo a un archivo de video
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+
     if message.reply_to_message:
         reply = message.reply_to_message
-        # Archivo de video
         if reply.video or (reply.document and (reply.document.mime_type or "").startswith("video/")):
             file_name = (reply.video.file_name if reply.video else reply.document.file_name) or "video"
             asyncio.create_task(procesar_encode(client, message, reply, uname, uid, original_name=file_name))
             return
-        # Archivo .torrent
         if reply.document and (reply.document.file_name or "").lower().endswith(".torrent"):
             task_id      = f"{uid}_{int(time.time())}"
             torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
@@ -3702,7 +3593,6 @@ async def cmd_encode(client: Client, message: Message):
             asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
             return
 
-    # Argumento: magnet link
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2:
         await message.reply_text(
@@ -3711,8 +3601,6 @@ async def cmd_encode(client: Client, message: Message):
             "┊ Responde al archivo con `/encode`\n┊\n"
             "┊ **Descargar Torrent:**\n"
             "┊ `/encode <magnet link>`\n"
-            "┊ `/encode magnet:?xt=urn:btih:...`\n┊\n"
-            "┊ (El bot preguntará interactivamente por los subtítulos)\n"
             f"╰──────────────────\n\n{BOT_SIGNATURE}"
         )
         return
@@ -3757,19 +3645,19 @@ async def cmd_cancel_global(client: Client, message: Message):
     else:
         await message.reply_text("⚠️ No tienes tareas activas en este momento.")
 
-# ─── ADMINISTRACIÓN ───────────────────────────────────────────────────────────
+# ─── ADMINISTRACIÓN DE PLANES Y AUTORIZACIÓN ──────────────────────────────────
 @bot.on_message(filters.command("id") & filters.reply)
 async def cmd_auth_user(client: Client, message: Message):
     if not is_admin(message.from_user.id): return
     target = message.reply_to_message.from_user
     if target:
         authorized_users[str(target.id)] = {
-            "role": "user", "username": target.username or "", "name": target.first_name or ""
+            "role": "user", "username": target.username or "", "name": target.first_name or "", "plan": 5
         }
         save_auth_users()
         await message.reply_text(
             f"✅ **Acceso concedido.**\n"
-            f"El usuario [{target.first_name}](tg://user?id={target.id}) (`{target.id}`) ahora puede usar el bot."
+            f"El usuario [{target.first_name}](tg://user?id={target.id}) (`{target.id}`) ahora puede usar el bot con **Plan 5**."
         )
 
 @bot.on_message(filters.command(["addid", "Addid"]))
@@ -3777,25 +3665,43 @@ async def cmd_add_by_id(client: Client, message: Message):
     if not is_admin(message.from_user.id): return
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply_text(
-            f"╭─ Uso correcto:\n┊ /addid <ID numérico>\n"
-            f"╰─ Ejemplo: `/addid 7666238795`\n\n{BOT_SIGNATURE}"
-        )
+        await message.reply_text(f"╭─ Uso correcto:\n┊ /addid <ID numérico>\n╰─ Ejemplo: `/addid 12345`\n\n{BOT_SIGNATURE}")
         return
     new_uid = parts[1]
-    authorized_users[new_uid] = {"role": "user", "username": "", "name": ""}
+    authorized_users[new_uid] = {"role": "user", "username": "", "name": "", "plan": 5}
     save_auth_users()
-    await message.reply_text(
-        f"✅ **ID `{new_uid}` autorizado.**\n"
-        f"Ese usuario ya puede usar el bot.\n\n{BOT_SIGNATURE}"
-    )
+    await message.reply_text(f"✅ **ID `{new_uid}` autorizado con Plan 5.**\n\n{BOT_SIGNATURE}")
+
+@bot.on_message(filters.command(["setplan", "plan"]))
+async def cmd_setplan(client: Client, message: Message):
+    if not is_admin(message.from_user.id): return
+    parts = message.text.strip().split()
+    if len(parts) < 3:
+        await message.reply_text(f"Uso: /setplan <ID> <5|10|15>\n\n{BOT_SIGNATURE}")
+        return
+    uid_str, plan_str = parts[1], parts[2]
+    
+    if uid_str not in authorized_users:
+        await message.reply_text(f"⚠️ Usuario `{uid_str}` no encontrado en la base de datos.\n\n{BOT_SIGNATURE}")
+        return
+        
+    try:
+        plan = int(plan_str)
+        if plan not in [5, 10, 15]: raise ValueError()
+    except:
+        await message.reply_text(f"⚠️ El plan debe ser exactamente 5, 10 o 15.\n\n{BOT_SIGNATURE}")
+        return
+
+    authorized_users[uid_str]["plan"] = plan
+    save_auth_users()
+    await message.reply_text(f"💎 Plan del usuario `{uid_str}` actualizado correctamente a **Plan {plan}**.\n\n{BOT_SIGNATURE}")
 
 @bot.on_message(filters.command(["removebyid", "rmid"]))
 async def cmd_remove_by_id(client: Client, message: Message):
     if not is_admin(message.from_user.id): return
     parts = message.text.strip().split()
     if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply_text(f"╭─ Uso: /rmid <ID numérico>\n╰─ Ejemplo: `/rmid 7666238795`\n\n{BOT_SIGNATURE}")
+        await message.reply_text(f"╭─ Uso: /rmid <ID numérico>\n╰─ Ejemplo: `/rmid 12345`\n\n{BOT_SIGNATURE}")
         return
     uid_str = parts[1]
     if uid_str in authorized_users:
@@ -3823,7 +3729,7 @@ async def cmd_set_admin(client: Client, message: Message):
     target = message.reply_to_message.from_user
     if target:
         authorized_users[str(target.id)] = {
-            "role": "admin", "username": target.username or "", "name": target.first_name or ""
+            "role": "admin", "username": target.username or "", "name": target.first_name or "", "plan": 15
         }
         save_auth_users()
         await message.reply_text(f"🛡 **Rango Admin otorgado** a [{target.first_name}](tg://user?id={target.id}).")
@@ -3844,9 +3750,10 @@ async def cmd_users(client: Client, message: Message):
     count = 1
     for str_uid, info in authorized_users.items():
         role_icon    = " 🛡 admin" if info.get("role") == "admin" else ""
+        plan_badge   = f" [Plan {info.get('plan', 5)}]"
         username     = info.get("username")
         display_name = f"@{username}" if username else f"id:{str_uid}"
-        text += f"┊ {count}. {display_name} ({str_uid}){role_icon}\n"
+        text += f"┊ {count}. {display_name} ({str_uid}){role_icon}{plan_badge}\n"
         count += 1
     text += f"╰─ Total : {count - 1}\n\n{BOT_SIGNATURE}"
     await message.reply_text(text)
@@ -3875,8 +3782,7 @@ async def cmd_reset(client: Client, message: Message):
         f"┊ 🧹 Liberado  : {get_readable_size(freed)}\n"
         f"┊ ⛔ Tareas    : {'Canceladas' if cancelled > 0 else 'Ninguna activa'}\n"
         f"┊ 📊 Stats     : Reiniciados\n"
-        f"╰─ Engine      : CRDWV2\n\n"
-        f"{BOT_SIGNATURE}"
+        f"╰─ Engine      : CRDWV2\n\n{BOT_SIGNATURE}"
     )
 
 @bot.on_message(filters.command("cookies"))
@@ -3896,9 +3802,6 @@ async def cmd_cookies(client: Client, message: Message):
             "┊ a este comando. Si el nombre contiene\n"
             "┊ 'crunchyroll' se guarda como cookies CR.\n"
             "┊\n"
-            "┊ Para credenciales de Crunchyroll usa:\n"
-            "┊ /crfiles — gestor completo de credenciales\n"
-            "┊\n"
             f"╰─ Solo admins.\n\n{BOT_SIGNATURE}"
         )
         return
@@ -3906,13 +3809,9 @@ async def cmd_cookies(client: Client, message: Message):
     fname_orig = doc_msg.document.file_name or "cookies.txt"
     fname_low  = fname_orig.lower()
     if not fname_low.endswith(".txt"):
-        await message.reply_text(
-            f"⚠️ El archivo debe ser `.txt`.\n"
-            f"Nombre recibido: `{fname_orig}`\n\n{BOT_SIGNATURE}"
-        )
+        await message.reply_text(f"⚠️ El archivo debe ser `.txt`.\nNombre recibido: `{fname_orig}`\n\n{BOT_SIGNATURE}")
         return
 
-    # Detectar automáticamente si es para Crunchyroll
     _bot_dir = os.path.dirname(os.path.abspath(__file__))
     if "crunchyroll" in fname_low or "crunchy" in fname_low:
         save_path = os.path.join(_bot_dir, "crunchyroll_cookies.txt")
@@ -3924,10 +3823,8 @@ async def cmd_cookies(client: Client, message: Message):
     msg = await message.reply_text("⏳ Guardando cookies...")
     try:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        # Descargar a un temporal y luego mover para evitar paths ambiguos
         tmp_path = save_path + ".tmp"
         dl_result = await client.download_media(doc_msg, file_name=tmp_path)
-        # Pyrogram puede ignorar file_name y devolver el path real
         actual = dl_result if (dl_result and os.path.exists(dl_result)) else tmp_path
         if os.path.exists(actual):
             os.replace(actual, save_path)
@@ -3939,19 +3836,14 @@ async def cmd_cookies(client: Client, message: Message):
             f"┊ 📄 Tipo    : {label}\n"
             f"┊ 💾 Archivo : `{os.path.basename(save_path)}`\n"
             f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
-            f"╰─ yt-dlp las usará en la próxima descarga.\n\n"
-            f"{BOT_SIGNATURE}"
+            f"╰─ yt-dlp las usará en la próxima descarga.\n\n{BOT_SIGNATURE}"
         )
     except Exception as e:
         await msg.edit_text(f"❌ Error al guardar cookies: `{e}`\n\n{BOT_SIGNATURE}")
 
-
-# ─── GESTOR DE CREDENCIALES CRUNCHYROLL ───────────────────────────────────────
 _BOT_DIR = os.path.dirname(os.path.abspath(__file__))
 CRUNCHY_CREDS_DIR = os.path.join(_BOT_DIR, "creds", "crunchyroll")
-
 _CRUNCHY_FILE_MAP = {
-    # extensión / nombre → (ruta destino, descripción)
     "cookies": (os.path.join(_BOT_DIR, "crunchyroll_cookies.txt"), "🍪 Cookies de Crunchyroll"),
     "wvd":     (os.path.join(CRUNCHY_CREDS_DIR, "device.wvd"),    "📱 Widevine Device (.wvd)"),
     "config":  (os.path.join(CRUNCHY_CREDS_DIR, "mp4.config"),    "⚙️ Config mp4decrypt"),
@@ -3960,34 +3852,24 @@ _CRUNCHY_FILE_MAP = {
     "key":     (os.path.join(CRUNCHY_CREDS_DIR, "keys.txt"),      "🔑 Claves de descifrado"),
     "license": (os.path.join(CRUNCHY_CREDS_DIR, "license.bin"),   "📜 Licencia binaria"),
 }
-
 def _crunchy_file_dest(filename: str) -> tuple[str, str]:
-    """Retorna (ruta_destino absoluta, descripción) según nombre/extensión del archivo."""
     fl  = filename.lower()
     ext = fl.rsplit(".", 1)[-1] if "." in fl else ""
     if "cookie" in fl or "crunchy" in fl:
         return os.path.join(_BOT_DIR, "crunchyroll_cookies.txt"), "🍪 Cookies de Crunchyroll"
-    if ext in _CRUNCHY_FILE_MAP:
-        return _CRUNCHY_FILE_MAP[ext]
+    if ext in _CRUNCHY_FILE_MAP: return _CRUNCHY_FILE_MAP[ext]
     return os.path.join(CRUNCHY_CREDS_DIR, filename), f"📁 {filename}"
-
 
 @bot.on_message(filters.command(["crfiles", "crfile", "crcreds", "crcookies"]))
 async def cmd_crfiles(client: Client, message: Message):
     if not is_admin(message.from_user.id): return
-
     os.makedirs(CRUNCHY_CREDS_DIR, exist_ok=True)
-
     doc_msg = None
-    if message.document:
-        doc_msg = message
-    elif message.reply_to_message and message.reply_to_message.document:
-        doc_msg = message.reply_to_message
+    if message.document: doc_msg = message
+    elif message.reply_to_message and message.reply_to_message.document: doc_msg = message.reply_to_message
 
-    # ── Sin archivo: mostrar estado actual ──────────────────────────────────
     if doc_msg is None:
         ruta_cookie = _crunchy_cookie_path() or "crunchyroll_cookies.txt"
-        
         check_files = [
             (ruta_cookie, "🍪 Cookies CR"),
             (f"{CRUNCHY_CREDS_DIR}/device.wvd",  "📱 Widevine Device"),
@@ -3995,15 +3877,12 @@ async def cmd_crfiles(client: Client, message: Message):
             (f"{CRUNCHY_CREDS_DIR}/keys.txt",    "🔑 Keys"),
             (f"{CRUNCHY_CREDS_DIR}/license.bin", "📜 License"),
         ]
-        
         lines = []
         for path, label in check_files:
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 lines.append(f"┊ ✅ {label} ({get_readable_size(os.path.getsize(path))})")
             else:
                 lines.append(f"┊ ❌ {label} — no subido")
-
-        # Archivos extra en la carpeta
         extra = []
         if os.path.isdir(CRUNCHY_CREDS_DIR):
             known = {"device.wvd", "mp4.config", "keys.txt", "license.bin"}
@@ -4011,71 +3890,45 @@ async def cmd_crfiles(client: Client, message: Message):
                 if f not in known:
                     p = os.path.join(CRUNCHY_CREDS_DIR, f)
                     extra.append(f"┊ 📄 {f} ({get_readable_size(os.path.getsize(p))})")
-
         body = "\n".join(lines)
-        if extra:
-            body += "\n┊\n┊ Extras:\n" + "\n".join(extra)
-
+        if extra: body += "\n┊\n┊ Extras:\n" + "\n".join(extra)
         await message.reply_text(
-            f"╭─「 🎌 Crunchyroll — Credenciales 」\n"
-            f"┊\n"
-            f"{body}\n"
-            f"┊\n"
-            f"┊ Adjunta un archivo a /crfiles para subirlo.\n"
-            f"┊ Tipos soportados:\n"
-            f"┊  cookies*.txt → cookies de CR\n"
-            f"┊  *.wvd        → Widevine Device\n"
-            f"┊  *.config/cfg → mp4decrypt config\n"
-            f"┊  *.keys/key   → claves de descifrado\n"
-            f"┊  *.license    → licencia binaria\n"
-            f"╰─ Solo admins.\n\n{BOT_SIGNATURE}"
+            f"╭─「 🎌 Crunchyroll — Credenciales 」\n┊\n{body}\n┊\n"
+            f"┊ Adjunta un archivo a /crfiles para subirlo.\n╰─ Solo admins.\n\n{BOT_SIGNATURE}"
         )
         return
 
-    # ── Con archivo: guardar ─────────────────────────────────────────────────
     fname       = doc_msg.document.file_name or "archivo"
     dest, label = _crunchy_file_dest(fname)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-
     msg = await message.reply_text(f"⏳ Guardando `{fname}`...")
     try:
         tmp_dest   = dest + ".tmp"
         dl_result  = await client.download_media(doc_msg, file_name=tmp_dest)
         actual     = dl_result if (dl_result and os.path.exists(dl_result)) else tmp_dest
-        if os.path.exists(actual):
-            os.replace(actual, dest)
-        if not os.path.exists(dest):
-            raise FileNotFoundError(f"No se pudo guardar en {dest}")
+        if os.path.exists(actual): os.replace(actual, dest)
+        if not os.path.exists(dest): raise FileNotFoundError(f"No se pudo guardar en {dest}")
         size = os.path.getsize(dest)
         await msg.edit_text(
             f"╭─「 🎌 Crunchyroll — Credencial guardada ✅ 」\n"
-            f"┊ 🗂 Tipo    : {label}\n"
-            f"┊ 💾 Guardado: `{os.path.basename(dest)}`\n"
-            f"┊ 📦 Tamaño  : {get_readable_size(size)}\n"
-            f"╰─ Se usará automáticamente en la próxima descarga CR.\n\n"
-            f"{BOT_SIGNATURE}"
+            f"┊ 🗂 Tipo    : {label}\n┊ 💾 Guardado: `{os.path.basename(dest)}`\n"
+            f"┊ 📦 Tamaño  : {get_readable_size(size)}\n╰─ Listo.\n\n{BOT_SIGNATURE}"
         )
     except Exception as e:
         await msg.edit_text(f"❌ Error guardando `{fname}`: `{e}`\n\n{BOT_SIGNATURE}")
 
 # ─── MARCA DE AGUA ────────────────────────────────────────────────────────────
 WM_POS_LABELS = {
-    "topleft":  "↖ Arriba Izq",
-    "topright": "↗ Arriba Der",
-    "center":   "✦ Centro",
-    "botleft":  "↙ Abajo Izq",
-    "botright": "↘ Abajo Der",
+    "topleft":  "↖ Arriba Izq", "topright": "↗ Arriba Der",
+    "center":   "✦ Centro", "botleft":  "↙ Abajo Izq", "botright": "↘ Abajo Der",
 }
 WM_POS_FFMPEG = {
-    "topleft":  ("10", "10"),
-    "topright": ("w-text_w-10", "10"),
+    "topleft":  ("10", "10"), "topright": ("w-text_w-10", "10"),
     "center":   ("(w-text_w)/2", "(h-text_h)/2"),
-    "botleft":  ("10", "h-text_h-20"),
-    "botright": ("w-text_w-10", "h-text_h-20"),
+    "botleft":  ("10", "h-text_h-20"), "botright": ("w-text_w-10", "h-text_h-20"),
 }
 
-def _wm_escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+def _wm_escape(text: str) -> str: return text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
 
 def apply_watermark(input_path: str, output_path: str, text: str, pos: str,
                     outline: bool, size_pct: int, stop_evt=None) -> None:
@@ -4194,13 +4047,11 @@ async def handle_wm_callback(client: Client, cb: CallbackQuery):
         uname    = cb.from_user.first_name
         proc_msg = await cb.message.edit_text(
             f"╭─「 💧 Marca de Agua 」\n┊\n{_wm_summary(sess)}"
-            f"┊\n┊ ⏬ Descargando video...\n"
-            f"╰──────────────────────────\n\n{BOT_SIGNATURE}",
+            f"┊\n┊ ⏬ Descargando video...\n╰──────────────────────────\n\n{BOT_SIGNATURE}",
             parse_mode=enums.ParseMode.HTML)
         asyncio.create_task(process_watermark(client, cb, sess, proc_msg, uname))
 
-async def process_watermark(client: Client, cb: CallbackQuery,
-                              sess: dict, proc_msg: Message, uname: str):
+async def process_watermark(client: Client, cb: CallbackQuery, sess: dict, proc_msg: Message, uname: str):
     task_id    = f"wm_{cb.from_user.id}_{int(time.time())}"
     chat_id    = sess["chat_id"]
     input_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_in.mp4")
@@ -4226,20 +4077,11 @@ async def process_watermark(client: Client, cb: CallbackQuery,
                 await asyncio.sleep(2)
 
         timer_task = asyncio.create_task(_wm_timer())
-        await asyncio.to_thread(apply_watermark,
-                                 input_path, output_path,
-                                 sess["text"], sess["pos"], sess["outline"], sess["size"], stop_evt)
-        await safe_edit(proc_msg,
-            f"╭─「 💧 Marca de Agua 」\n┊\n┊ ✅ Procesado — subiendo...\n"
-            f"╰──────────────────────────\n\n{BOT_SIGNATURE}")
+        await asyncio.to_thread(apply_watermark, input_path, output_path, sess["text"], sess["pos"], sess["outline"], sess["size"], stop_evt)
+        await safe_edit(proc_msg, f"╭─「 💧 Marca de Agua 」\n┊\n┊ ✅ Procesado — subiendo...\n╰──────────────────────────\n\n{BOT_SIGNATURE}")
         start_t = time.time()
         caption = source_caption if source_caption else BOT_SIGNATURE
-        await client.send_video(
-            chat_id=chat_id, video=output_path,
-            caption=caption, parse_mode=enums.ParseMode.HTML,
-            supports_streaming=True,
-            progress=upload_progress,
-            progress_args=(proc_msg, start_t, uname, task_id))
+        await client.send_video(chat_id=chat_id, video=output_path, caption=caption, parse_mode=enums.ParseMode.HTML, supports_streaming=True, progress=upload_progress, progress_args=(proc_msg, start_t, uname, task_id))
         try: await proc_msg.delete()
         except Exception: pass
     except Exception as e:
@@ -4258,6 +4100,9 @@ async def handle_video_upload(client: Client, message: Message):
     uid = message.from_user.id
     if not is_auth(uid): return
 
+    if get_user_plan(uid) < 15:
+        return
+
     fname = ""
     mime = ""
     if message.document:
@@ -4269,7 +4114,6 @@ async def handle_video_upload(client: Client, message: Message):
 
     uname = message.from_user.username or message.from_user.first_name or str(uid)
 
-    # 1. Detección automática de Torrent
     if fname.endswith(".torrent") or mime == "application/x-bittorrent":
         task_id = f"{uid}_{int(time.time())}"
         torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
@@ -4281,17 +4125,13 @@ async def handle_video_upload(client: Client, message: Message):
         asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
         return
 
-    # 2. Detección automática de CUALQUIER VIDEO (.mkv, .mp4, etc)
     if mime.startswith("video/") or fname.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm")):
         asyncio.create_task(procesar_encode(client, message, message, uname, uid, original_name=fname or "video"))
         return
 
-    pass
-
-
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
-                 "addid", "Addid", "rmid", "removebyid",
+                 "addid", "Addid", "rmid", "removebyid", "setplan", "plan",
                  "getcode", "codigo", "code",
                  "quality", "calidad",
                  "coms", "cancel", "cancelar", "admin", "remadmin", "users",
@@ -4337,18 +4177,30 @@ async def handle_text_input(client: Client, message: Message):
 
     if _wm_sessions.get(uid_str) and re.search(r"https?://", raw_text):
         _wm_sessions.pop(uid_str, None)
-        await message.reply_text(
-            f"⚠️ Sesión de marca de agua cancelada automáticamente.\n"
-            f"Procesando tu enlace...\n\n{BOT_SIGNATURE}")
+        await message.reply_text(f"⚠️ Sesión de marca de agua cancelada automáticamente.\nProcesando tu enlace...\n\n{BOT_SIGNATURE}")
 
     want_subs = bool(re.search(r"(?:^|\s)-lat(?:\s|$)", raw_text, re.IGNORECASE))
     urls = re.findall(r"https?://[^\s]+", raw_text)
     if not urls: return
 
     uname = message.from_user.first_name
+    user_plan = get_user_plan(uid)
     queued = 0
+    
     for i, url in enumerate(urls, 1):
-        url   = re.sub(r"\s*-lat\s*$", "", url, flags=re.IGNORECASE).strip()
+        url = re.sub(r"\s*-lat\s*$", "", url, flags=re.IGNORECASE).strip()
+        
+        # VALIDACIÓN DEL PLAN DE MEMBRESÍA
+        req_plan = get_required_plan_for_url(url)
+        if user_plan < req_plan:
+            await message.reply_text(
+                f"⛔ **Acceso Restringido**\n"
+                f"Este enlace requiere el **Plan {req_plan}**.\n"
+                f"Actualmente tienes el **Plan {user_plan}**.\n\n"
+                f"Contacta al administrador para mejorar tu plan.\n{BOT_SIGNATURE}"
+            )
+            continue
+            
         label = f"Cola: {i}/{len(urls)}"
         if "crunchyroll.com" in url.lower():
             asyncio.create_task(procesar_crunchyroll(client, message, url, uname, uid, want_subs))
@@ -4364,13 +4216,9 @@ async def handle_text_input(client: Client, message: Message):
     if queued > 0:
         q = download_queue.qsize()
         if queued == 1 and len(urls) == 1:
-            await message.reply_text(
-                f"📥 Enlace añadido a la cola.{subs_note}\n"
-                f"🚦 Tareas en espera: {q}\n\n{BOT_SIGNATURE}")
+            await message.reply_text(f"📥 Enlace añadido a la cola.{subs_note}\n🚦 Tareas en espera: {q}\n\n{BOT_SIGNATURE}")
         elif queued > 0:
-            await message.reply_text(
-                f"📥 {queued} enlace(s) añadido(s) a la cola.{subs_note}\n"
-                f"🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
+            await message.reply_text(f"📥 {queued} enlace(s) añadido(s) a la cola.{subs_note}\n🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 async def main():
@@ -4383,13 +4231,13 @@ async def main():
 
 if __name__ == "__main__":
     if not API_ID or API_ID == 0:
-        print("❌ ERROR: Configura API_ID en los Secrets de Replit")
+        print("❌ ERROR: Configura API_ID en los Secrets")
         sys.exit(1)
     if not API_HASH:
-        print("❌ ERROR: Configura API_HASH en los Secrets de Replit")
+        print("❌ ERROR: Configura API_HASH en los Secrets")
         sys.exit(1)
     if not BOT_TOKEN:
-        print("❌ ERROR: Configura BOT_TOKEN en los Secrets de Replit")
+        print("❌ ERROR: Configura BOT_TOKEN en los Secrets")
         sys.exit(1)
     print("🚀 Iniciando bot...")
-    bot.run(main())
+    bot.run(main())  
