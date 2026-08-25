@@ -4085,14 +4085,6 @@ def _wm_kb_pos():
         [InlineKeyboardButton("❌ Cancelar",   callback_data="wm_cancel")],
     ])
 
-def _wm_kb_outline():
-    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Con Contorno", callback_data="wm_outline:yes"),
-         InlineKeyboardButton("🚫 Sin Contorno", callback_data="wm_outline:no")],
-        [InlineKeyboardButton("❌ Cancelar",      callback_data="wm_cancel")],
-    ])
-
 def _wm_kb_size():
     from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup([
@@ -4202,6 +4194,42 @@ async def process_watermark(client: Client, cb: CallbackQuery,
             try:
                 if os.path.exists(p): os.remove(p)
             except Exception: pass
+
+# ─── DETECCIÓN AUTOMÁTICA (MKV, MP4, TORRENTS) ─────────────────────────────
+@bot.on_message(filters.video | filters.document)
+async def handle_video_upload(client: Client, message: Message):
+    uid = message.from_user.id
+    if not is_auth(uid): return
+
+    fname = ""
+    mime = ""
+    if message.document:
+        fname = (message.document.file_name or "").lower()
+        mime = message.document.mime_type or ""
+    elif message.video:
+        fname = (message.video.file_name or "").lower()
+        mime = message.video.mime_type or ""
+
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+
+    # 1. Detección automática de Torrent
+    if fname.endswith(".torrent") or mime == "application/x-bittorrent":
+        task_id = f"{uid}_{int(time.time())}"
+        torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
+        await message.reply_text(
+            f"╭─「 🧲 Torrent detectado automáticamente 」\n┊ 📄 {fname}\n"
+            f"┊ ⏳ Descargando y procesando en español...\n"
+            f"╰─ Usa /cancel para detener\n\n{BOT_SIGNATURE}")
+        await client.download_media(message, file_name=torrent_path)
+        asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
+        return
+
+    # 2. Detección automática de CUALQUIER VIDEO (.mkv, .mp4, etc)
+    if mime.startswith("video/") or fname.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm")):
+        asyncio.create_task(procesar_encode(client, message, message, uname, uid, original_name=fname or "video"))
+        return
+
+    pass
 
 
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
