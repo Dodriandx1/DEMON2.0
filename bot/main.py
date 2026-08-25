@@ -987,7 +987,7 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
         f"┊ [{make_bar(0)}] 0.00%\n"
         f"┊ Status   : Iniciando descarga...\n"
         f"┊ Archivo  : {original_name[:40]}\n"
-        f"╰ Mode     : #Encode\n\n{BOT_SIGNATURE}"
+        f"╰ Mode     : #AutoEncode\n\n{BOT_SIGNATURE}"
     )
     input_path  = os.path.join(DOWNLOAD_DIR, f"{task_id}_input.mkv")
     output_path = os.path.join(DOWNLOAD_DIR, f"{task_id}_output.mp4")
@@ -999,70 +999,72 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
             target_msg,
             file_name=input_path,
             progress=download_progress,
-            progress_args=(msg, start_t, uname, task_id, "Telegram", "#Encode")
+            progress_args=(msg, start_t, uname, task_id, "Telegram", "#AutoEncode")
         )
         
         await safe_edit(msg,
             f"╭ Task By → 「{uname}」\n"
-            f"┊ 🔍 Analizando pistas del archivo...\n"
-            f"╰ Mode      : #Encode\n\n{BOT_SIGNATURE}"
+            f"┊ 🔍 Seleccionando español automáticamente...\n"
+            f"╰ Mode      : #AutoEncode\n\n{BOT_SIGNATURE}"
         )
 
         tracks = await asyncio.to_thread(get_media_tracks, input_path)
         audio_map = "0:a?"
         vf_filter = None
 
-        if tracks["audios"] or tracks["subs"]:
-            menu_event = asyncio.Event()
-            _encode_menus[task_id] = {
-                "audios": tracks["audios"], "subs": tracks["subs"],
-                "sel_a": tracks["audios"][0]["idx"] if tracks["audios"] else None,
-                "sel_s": None,
-                "event": menu_event
-            }
-            menu_msg = await message.reply_text(
-                get_encode_text(task_id, original_name[:40]),
-                reply_markup=get_encode_keyboard(task_id)
+        sel_a = None
+        sel_s = None
+        spa_keywords = ["spa", "es", "spanish", "español", "latino", "castellano"]
+
+        # Buscar audio en español
+        if tracks["audios"]:
+            for a in tracks["audios"]:
+                if any(k in a["label"].lower() for k in spa_keywords):
+                    sel_a = a["idx"]
+                    break
+            if not sel_a:
+                sel_a = tracks["audios"][0]["idx"]
+
+        # Buscar subtítulos en español
+        if tracks["subs"]:
+            for s in tracks["subs"]:
+                if any(k in s["label"].lower() for k in spa_keywords):
+                    sel_s = s["idx"]
+                    break
+            if not sel_s:
+                sel_s = tracks["subs"][0]["idx"]
+
+        if sel_a:
+            audio_map = f"0:{sel_a}"
+        
+        if sel_s:
+            await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos [{sel_s}]...\n╰ Mode      : #AutoEncode\n\n{BOT_SIGNATURE}")
+            extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
+            ext_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sel_s}",
+                extracted_sub,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
             )
-            
-            while not menu_event.is_set():
-                if active_tasks.get(task_id) == "CANCELLED":
-                    raise asyncio.CancelledError("USER_CANCELLED")
-                await asyncio.sleep(1)
-            
-            sel_a = _encode_menus[task_id]["sel_a"]
-            sel_s = _encode_menus[task_id]["sel_s"]
-            _encode_menus.pop(task_id, None)
-            
-            if sel_a:
-                audio_map = f"0:{sel_a}"
-            
-            if sel_s:
-                await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ 🔤 Extrayendo subtítulo [{sel_s}]...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
-                extracted_sub = os.path.join(DOWNLOAD_DIR, f"{task_id}_extracted.ass")
-                ext_proc = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", input_path, "-map", f"0:{sel_s}",
-                    extracted_sub,
-                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
-                )
-                await ext_proc.wait()
-                if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
-                    abs_sub = os.path.abspath(extracted_sub).replace('\\', '/').replace(':', '\\:')
-                    vf_filter = f"subtitles='{abs_sub}':charenc=UTF-8"
+            await ext_proc.wait()
+            if os.path.exists(extracted_sub) and os.path.getsize(extracted_sub) > 0:
+                abs_sub = os.path.abspath(extracted_sub).replace('\\', '/').replace(':', '\\:')
+                vf_filter = f"subtitles='{abs_sub}':charenc=UTF-8"
 
         if os.path.exists(output_path):
             try: os.remove(output_path)
             except: pass
             
-        await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ ⚙️ Comprimiendo a 720p...\n╰ Mode      : #Encode\n\n{BOT_SIGNATURE}")
+        await safe_edit(msg, f"╭ Task By → 「{uname}」\n┊ ⚙️ Comprimiendo a 720p MP4...\n╰ Mode      : #AutoEncode\n\n{BOT_SIGNATURE}")
         
         success = await encode_video(input_path, output_path, msg, uname, task_id, audio_map=audio_map, vf=vf_filter)
 
         if not success or not os.path.exists(output_path):
-            raise Exception("Conversión fallida — revisa los logs del bot para ver el error de FFmpeg")
+            raise Exception("Conversión fallida — revisa los logs del bot")
 
         await safe_edit(msg, upload_panel(uname, 0, 0, os.path.getsize(output_path), 0, 0, 0, task_id))
-        await upload_smart_file(client, message, output_path, msg, uname, task_id, title=f"{original_name} [MP4]")
+        
+        original_title = original_name.rsplit(".", 1)[0]
+        await upload_smart_file(client, message, output_path, msg, uname, task_id, title=f"{original_title} [MP4]")
         
         try: await msg.delete()
         except Exception: pass
