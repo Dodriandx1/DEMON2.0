@@ -638,37 +638,35 @@ async def upload_smart_file(client: Client, message: Message, path: str,
         thumb = extract_thumbnail(path)
         meta  = get_video_meta(path)
         try:
+            # Obligamos a Pyrogram a procesarlo como Video Stream
             await client.send_video(
-                chat_id=message.chat.id, video=path, thumb=thumb,
+                chat_id=message.chat.id, 
+                video=path, 
+                thumb=thumb,
                 supports_streaming=True,
-                width=meta["width"] or None, height=meta["height"] or None,
-                duration=meta["duration"] or None,
-                caption=caption, parse_mode=enums.ParseMode.HTML,
-                progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
+                width=meta.get("width") or 1280,   # Forzamos dimensiones
+                height=meta.get("height") or 720,
+                caption=caption, 
+                parse_mode=enums.ParseMode.HTML,
+                progress=upload_progress, 
+                progress_args=(msg, start_t, uname, task_id)
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            try:
-                await client.send_video(
-                    chat_id=message.chat.id, video=path, thumb=thumb,
-                    supports_streaming=True,
-                    caption=caption, parse_mode=enums.ParseMode.HTML,
-                    progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await client.send_document(
-                    chat_id=message.chat.id, document=path, thumb=thumb,
-                    caption=caption, parse_mode=enums.ParseMode.HTML,
-                    progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-                )
+        except Exception as e:
+            print(f"Error forzando video: {e}")
+            # Solo si falla irremediablemente lo manda como documento
+            await client.send_document(
+                chat_id=message.chat.id, document=path, thumb=thumb,
+                caption=f"⚠️ No se pudo procesar como video nativo.\n\n{caption}", 
+                parse_mode=enums.ParseMode.HTML,
+                progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
+            )
         finally:
             if thumb and os.path.exists(thumb):
                 try: os.remove(thumb)
                 except Exception: pass
-
+                    
     elif lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
         photo_path = await _ensure_jpeg(path)
         try:
