@@ -4124,51 +4124,6 @@ def _wm_kb_size():
         [InlineKeyboardButton("❌ Cancelar", callback_data="wm_cancel")],
     ])
 
-@bot.on_message(filters.video | (filters.document & ~filters.forwarded))
-async def handle_video_upload(client: Client, message: Message):
-    uid = message.from_user.id
-    if not is_auth(uid): return
-
-    fname = ""
-    if message.document:
-        fname = (message.document.file_name or "").lower()
-    elif message.video:
-        fname = (message.video.file_name or "").lower()
-
-    uname = message.from_user.username or message.from_user.first_name or str(uid)
-
-    # 1. Detección automática de Torrent
-    if fname.endswith(".torrent") or (message.document and message.document.mime_type == "application/x-bittorrent"):
-        task_id = f"{uid}_{int(time.time())}"
-        torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
-        await message.reply_text(
-            f"╭─「 🧲 Torrent detectado automáticamente 」\n┊ 📄 {fname}\n"
-            f"┊ ⏳ Descargando y procesando en español...\n"
-            f"╰─ Usa /cancel para detener\n\n{BOT_SIGNATURE}")
-        await client.download_media(message, file_name=torrent_path)
-        asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
-        return
-
-    # 2. Detección automática de MKV
-    if fname.endswith(".mkv"):
-        asyncio.create_task(procesar_encode(client, message, message, uname, uid, original_name=fname))
-        return
-
-    # 3. Si no es torrent ni mkv, entra al flujo de Marca de Agua
-    file_id = message.video.file_id if message.video else message.document.file_id
-    _wm_sessions[str(uid)] = {
-        "step":    "awaiting_text",
-        "file_id": file_id,
-        "chat_id": message.chat.id,
-        "caption": message.caption or "",
-        "text":    "", "pos": "center", "outline": True, "size": 50,
-    }
-    await message.reply_text(
-        "╭─「 💧 Marca de Agua 」\n┊\n┊ Video MP4 recibido.\n"
-        "┊ Escribe el texto que quieres\n┊ usar como marca de agua:\n┊\n"
-        f"╰─ /wm_cancel para cancelar\n\n{BOT_SIGNATURE}", quote=True)
-    
-
 @bot.on_message(filters.command("wm_cancel"))
 async def cmd_wm_cancel(client: Client, message: Message):
     _wm_sessions.pop(str(message.from_user.id), None)
@@ -4269,30 +4224,7 @@ async def process_watermark(client: Client, cb: CallbackQuery,
                 if os.path.exists(p): os.remove(p)
             except Exception: pass
 
-# ─── CALLBACK PARA MENÚ INTERACTIVO DE AUDIO Y SUBTÍTULOS ────────────────────
-@bot.on_callback_query(filters.regex(r"^enc_(a|s|start):"))
-async def cb_encode_menu(client: Client, cb: CallbackQuery):
-    data = cb.data.split(":")
-    action = data[0]
-    task_id = data[1]
-    
-    if task_id not in _encode_menus:
-        await cb.answer("Sesión expirada o cancelada.", show_alert=True)
-        return
-        
-    sess = _encode_menus[task_id]
-    
-    if action == "enc_a":
-        sess["sel_a"] = data[2]
-        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
-    elif action == "enc_s":
-        sess["sel_s"] = None if data[2] == "none" else data[2]
-        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
-    elif action == "enc_start":
-        await cb.message.edit_text("✅ Opciones guardadas. Procesando video...", reply_markup=None)
-        sess["event"].set()
 
-# ─── RECEPTOR DE TEXTO (WM text + links) ─────────────────────────────────────
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
                  "addid", "Addid", "rmid", "removebyid",
@@ -4303,14 +4235,10 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "queue", "Queue", "cola", "playlist", "Playlist", "pl",
                  "encode", "Encode", "torrent", "cookies",
                  "crfiles", "crfile", "crcreds", "crcookies",
-                 # Música
                  "play", "Play", "playv", "Playv", "playvideo", "pv",
                  "search", "buscar", "musica", "música", "sm",
-                 # Consulta pública de metadatos de anime
                  "a", "buscaranime", "animeinfo", "anime",
-                 # PDF / documentos
                  "pdf", "doc", "gdrive",
-                 # Cómics / galerías
                  "comic", "comicdl", "manga", "comicpdf", "mangapdf"]
 
 @bot.on_message(
@@ -4322,9 +4250,7 @@ _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
 async def handle_text_input(client: Client, message: Message):
     uid      = message.from_user.id
     raw_text = message.text.strip()
-    print(f"[handler] msg de uid={uid} auth={is_auth(uid)} texto={raw_text[:60]}")
 
-    # Input de texto para marca de agua
     uid_str = str(uid)
     sess = _wm_sessions.get(uid_str)
     if sess and sess.get("step") == "awaiting_text":
@@ -4338,7 +4264,6 @@ async def handle_text_input(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML, reply_markup=_wm_kb_pos())
         return
 
-    # Links
     if not is_auth(uid):
         await message.reply_text(
             f"⛔ **Acceso denegado.**\n"
@@ -4346,7 +4271,6 @@ async def handle_text_input(client: Client, message: Message):
             f"Pídele al admin que ejecute: `/addid {uid}`")
         return
 
-    # Si está en flujo WM y envía un link, cancelar WM
     if _wm_sessions.get(uid_str) and re.search(r"https?://", raw_text):
         _wm_sessions.pop(uid_str, None)
         await message.reply_text(
@@ -4367,7 +4291,6 @@ async def handle_text_input(client: Client, message: Message):
         elif _is_comic_page_url(url):
             asyncio.create_task(procesar_comic(client, message, url, uname, uid))
         elif _is_pdf_url(url) or _is_gdrive_url(url):
-            # PDFs y Google Drive: bypass de cola → procesar_pdf directo
             asyncio.create_task(procesar_pdf(client, message, url, uname, uid, label))
         else:
             await download_queue.put((client, message, url, uname, uid, label, want_subs))
@@ -4384,7 +4307,6 @@ async def handle_text_input(client: Client, message: Message):
             await message.reply_text(
                 f"📥 {queued} enlace(s) añadido(s) a la cola.{subs_note}\n"
                 f"🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
-
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 async def main():
