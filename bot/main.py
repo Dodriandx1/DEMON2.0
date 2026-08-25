@@ -4129,31 +4129,33 @@ async def handle_video_upload(client: Client, message: Message):
     uid = message.from_user.id
     if not is_auth(uid): return
 
-    # Archivo .torrent enviado directamente
+    fname = ""
     if message.document:
         fname = (message.document.file_name or "").lower()
-        mime  = message.document.mime_type or ""
-        if fname.endswith(".torrent") or mime == "application/x-bittorrent":
-            uname        = message.from_user.username or message.from_user.first_name or str(uid)
-            task_id      = f"{uid}_{int(time.time())}"
-            torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
-            await message.reply_text(
-                f"╭─「 🧲 Torrent detectado 」\n┊ 📄 {message.document.file_name}\n"
-                f"┊ ⏳ Descargando y procesando...\n"
-                f"╰─ Usa /cancel para detener\n\n{BOT_SIGNATURE}")
-            await client.download_media(message, file_name=torrent_path)
-            asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
-            return
+    elif message.video:
+        fname = (message.video.file_name or "").lower()
 
-    if message.video:
-        file_id = message.video.file_id
-    elif message.document:
-        mime = message.document.mime_type or ""
-        if not mime.startswith("video/"): return
-        file_id = message.document.file_id
-    else:
+    uname = message.from_user.username or message.from_user.first_name or str(uid)
+
+    # 1. Detección automática de Torrent
+    if fname.endswith(".torrent") or (message.document and message.document.mime_type == "application/x-bittorrent"):
+        task_id = f"{uid}_{int(time.time())}"
+        torrent_path = os.path.join(DOWNLOAD_DIR, f"{task_id}.torrent")
+        await message.reply_text(
+            f"╭─「 🧲 Torrent detectado automáticamente 」\n┊ 📄 {fname}\n"
+            f"┊ ⏳ Descargando y procesando en español...\n"
+            f"╰─ Usa /cancel para detener\n\n{BOT_SIGNATURE}")
+        await client.download_media(message, file_name=torrent_path)
+        asyncio.create_task(procesar_torrent(client, message, torrent_path, uname, task_id, is_magnet=False))
         return
 
+    # 2. Detección automática de MKV
+    if fname.endswith(".mkv"):
+        asyncio.create_task(procesar_encode(client, message, message, uname, uid, original_name=fname))
+        return
+
+    # 3. Si no es torrent ni mkv, entra al flujo de Marca de Agua
+    file_id = message.video.file_id if message.video else message.document.file_id
     _wm_sessions[str(uid)] = {
         "step":    "awaiting_text",
         "file_id": file_id,
@@ -4162,9 +4164,10 @@ async def handle_video_upload(client: Client, message: Message):
         "text":    "", "pos": "center", "outline": True, "size": 50,
     }
     await message.reply_text(
-        "╭─「 💧 Marca de Agua 」\n┊\n┊ Video recibido.\n"
+        "╭─「 💧 Marca de Agua 」\n┊\n┊ Video MP4 recibido.\n"
         "┊ Escribe el texto que quieres\n┊ usar como marca de agua:\n┊\n"
         f"╰─ /wm_cancel para cancelar\n\n{BOT_SIGNATURE}", quote=True)
+    
 
 @bot.on_message(filters.command("wm_cancel"))
 async def cmd_wm_cancel(client: Client, message: Message):
