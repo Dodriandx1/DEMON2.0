@@ -162,15 +162,20 @@ def get_required_plan_for_url(url: str) -> int:
     
     # PLAN 15: Nopol, Crunchyroll, Torrents, Servidores de Video Avanzados
     plan_15_keywords = [
-        "toonx.net", "jav.guru", "javmiku.com", "javnorth.com", "hentaiheroes.com", "nhentai.net", 
-        "streamwish", "voe", "vidhide", "filemoon", "mixdrop", "mp4upload", "streamtape", 
-        "flashwish", "callistanise", "filelions", "swishdesu", "crunchyroll.com", "magnet:"
+     "alphaporno", "chaturbate", "motherless", "pornbox", "pornhub", "pornotube", 
+        "porntop", "porntube", "pornerbros", "pornflip", "youporn", "zenporn",
+        "jav", "hentai", "toonx", "nhentai", "xvideos", "xnxx", "xhamster", 
+        "spankbang", "eporner", "redtube", "rule34", "soundgasm",
+        "streamwish", "voe", "vidhide", "filemoon", "mixdrop", "mp4upload", 
+        "streamtape", "flashwish", "callistanise", "filelions", "swishdesu", 
+        "crunchyroll", "magnet:" 
     ]
     if any(k in low for k in plan_15_keywords): return 15
         
     # PLAN 10: Nubes de Almacenamiento, PDFs, Documentos
     plan_10_keywords = [
-        "mega.nz", "mediafire.com", "drive.google.com", "docs.google.com", ".pdf"
+    "mega.nz", "mediafire.com", "drive.google.com", "docs.google.com", 
+        "dropbox.com", "onedrive.live.com", ".pdf"
     ]
     if any(k in low for k in plan_10_keywords): return 10
         
