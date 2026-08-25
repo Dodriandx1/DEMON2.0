@@ -622,66 +622,123 @@ async def upload_smart_file(client: Client, message: Message, path: str,
         _stats["bytes"] += os.path.getsize(path)
     except Exception:
         pass
+        
     fname   = os.path.basename(path)
     display = title.strip() if title.strip() else fname
     lower   = fname.lower()
-    if lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")):
-        icon = "🖼️"
-    elif lower.endswith((".mp3", ".m4a", ".wav", ".flac", ".ogg")):
-        icon = "🎵"
-    else:
+    
+    if lower.endswith((".mp4", ".mkv", ".webm", ".avi", ".mov")):
         icon = "🎬"
-    caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
-    start_t = time.time()
-                    
+        caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
+        start_t = time.time()
+        thumb = extract_thumbnail(path)
+        meta  = get_video_meta(path)
+        
+        # Obligamos a definir ancho y alto para que Telegram no lo vuelva documento
+        w = meta.get("width")
+        h = meta.get("height")
+        if not w or w == 0: 
+            w = 1280
+        if not h or h == 0: 
+            h = 720
+        
+        try:
+            await client.send_video(
+                chat_id=message.chat.id, 
+                video=path, 
+                thumb=thumb,
+                supports_streaming=True,
+                width=w, 
+                height=h,
+                duration=meta.get("duration") or 0,
+                caption=caption, 
+                parse_mode=enums.ParseMode.HTML,
+                progress=upload_progress, 
+                progress_args=(msg, start_t, uname, task_id)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"Error forzando video: {e}")
+            # Fallback en caso de que Telegram rechace el formato
+            await client.send_document(
+                chat_id=message.chat.id, 
+                document=path, 
+                thumb=thumb,
+                caption=f"⚠️ {caption}", 
+                parse_mode=enums.ParseMode.HTML,
+                progress=upload_progress, 
+                progress_args=(msg, start_t, uname, task_id)
+            )
+        finally:
+            if thumb and os.path.exists(thumb):
+                try: 
+                    os.remove(thumb)
+                except Exception: 
+                    pass
+
     elif lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp")):
         photo_path = await _ensure_jpeg(path)
+        icon = "🖼️"
+        caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
+        start_t = time.time()
         try:
             await client.send_photo(
-                chat_id=message.chat.id, photo=photo_path, caption=caption,
+                chat_id=message.chat.id, 
+                photo=photo_path, 
+                caption=caption,
                 parse_mode=enums.ParseMode.HTML,
-                progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
+                progress=upload_progress, 
+                progress_args=(msg, start_t, uname, task_id)
             )
         except asyncio.CancelledError:
             raise
         except Exception:
-            await client.send_document(
-                chat_id=message.chat.id, document=photo_path, caption=caption,
-                parse_mode=enums.ParseMode.HTML,
-                progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-            )
+            pass
         finally:
             if photo_path != path and os.path.exists(photo_path):
-                try: os.remove(photo_path)
-                except Exception: pass
-        
-else:
+                try: 
+                    os.remove(photo_path)
+                except Exception: 
+                    pass
+
+    elif lower.endswith(".gif"):
+        icon = "🎬"
+        caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
+        start_t = time.time()
+        await client.send_animation(
+            chat_id=message.chat.id, 
+            animation=path, 
+            caption=caption,
+            parse_mode=enums.ParseMode.HTML,
+            progress=upload_progress, 
+            progress_args=(msg, start_t, uname, task_id)
+        )
+
+    elif lower.endswith((".mp3", ".m4a", ".wav", ".flac", ".ogg")):
+        icon = "🎵"
+        caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
+        start_t = time.time()
+        await client.send_audio(
+            chat_id=message.chat.id, 
+            audio=path, 
+            caption=caption,
+            parse_mode=enums.ParseMode.HTML,
+            progress=upload_progress, 
+            progress_args=(msg, start_t, uname, task_id)
+        )
+
+    else:
         icon = "📄"
         caption = f"{icon} <b>{display}</b>\n\n{BOT_SIGNATURE}"
         start_t = time.time()
         await client.send_document(
-            chat_id=message.chat.id, document=path, caption=caption,
+            chat_id=message.chat.id, 
+            document=path, 
+            caption=caption,
             parse_mode=enums.ParseMode.HTML,
-            progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-        )
-
-    elif lower.endswith(".gif"):
-        await client.send_animation(
-            chat_id=message.chat.id, animation=path, caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-        )
-    elif lower.endswith((".mp3", ".m4a", ".wav", ".flac", ".ogg")):
-        await client.send_audio(
-            chat_id=message.chat.id, audio=path, caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
-        )
-    else:
-        await client.send_document(
-            chat_id=message.chat.id, document=path, caption=caption,
-            parse_mode=enums.ParseMode.HTML,
-            progress=upload_progress, progress_args=(msg, start_t, uname, task_id)
+            progress=upload_progress, 
+            progress_args=(msg, start_t, uname, task_id)
         )
 
 # ─── RECODIFICADOR ────────────────────────────────────────────────────────────
