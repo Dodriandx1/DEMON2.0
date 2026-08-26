@@ -230,8 +230,21 @@ def get_platform_icon(url: str) -> str:
 def extract_thumbnail(video_path: str):
     thumb = video_path + ".jpg"
     try:
+        # Intento 1: Tomar la foto a los 10 segundos (para evitar pantallas negras de inicio)
         subprocess.run(
-            ["ffmpeg", "-i", video_path, "-ss", "00:00:01",
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-ss", "00:00:10", "-i", video_path,
+             "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "2", thumb, "-y"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=15, check=True
+        )
+        if os.path.exists(thumb) and os.path.getsize(thumb) > 0:
+            return thumb
+            
+        # Intento 2 (Respaldo): Si el video dura menos de 10 segundos, lo intenta en el segundo 1
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-ss", "00:00:01", "-i", video_path,
              "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "2", thumb, "-y"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=15, check=True
@@ -242,31 +255,42 @@ def extract_thumbnail(video_path: str):
 
 def get_video_meta(video_path: str) -> dict:
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=width,height", "-of", "json", video_path],
-            capture_output=True, text=True, timeout=10
-        )
+        # Añadimos -probesize y -analyzeduration para obligarlo a buscar la duración escondida
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-probesize", "50M", "-analyzeduration", "100M",
+            "-select_streams", "v:0",
+            "-show_entries", "format=duration:stream=width,height",
+            "-of", "json", video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         data = json.loads(result.stdout)
         
-        width, height, duration = 0, 0, 0
+        width, height, duration = 1280, 720, 0
         
-        # Extraer duración
         if "format" in data and "duration" in data["format"]:
-            duration = int(float(data["format"]["duration"]))
-            
-        # Extraer resolución
-        for stream in data.get("streams", []):
-            if "width" in stream and "height" in stream:
-                width = stream["width"]
-                height = stream["height"]
-                break
+            try:
+                duration = int(float(data["format"]["duration"]))
+            except (ValueError, TypeError):
+                pass
                 
+        if "streams" in data and len(data["streams"]) > 0:
+            stream = data["streams"][0]
+            width = int(stream.get("width", 1280))
+            height = int(stream.get("height", 720))
+            
+            # Si format no tenía la duración, la buscamos en la pista de video
+            if duration == 0 and "duration" in stream:
+                try:
+                    duration = int(float(stream["duration"]))
+                except (ValueError, TypeError):
+                    pass
+                    
         return {"width": width, "height": height, "duration": duration}
     except Exception as e:
         print(f"[Meta Error]: {e}")
-        return {"width": 0, "height": 0, "duration": 0}
-
+        return {"width": 1280, "height": 720, "duration": 0} 
+        
 # ─── MENÚ INTERACTIVO DE PISTAS ──────────────────────────────────────────
 _encode_menus = {}
 
