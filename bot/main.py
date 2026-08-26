@@ -3940,31 +3940,40 @@ def _wm_escape(text: str) -> str: return text.replace("\\", "\\\\").replace("'",
 
 def apply_watermark(input_path: str, output_path: str, text: str, pos: str,
                     outline: bool, size_pct: int, stop_evt=None) -> None:
-    meta     = get_video_meta(input_path)
-    height   = meta.get("height") or 720
-    width    = meta.get("width") or 1280
+    meta = get_video_meta(input_path)
+    height = meta.get("height") or 720
+    width = meta.get("width") or 1280
     scale_filter = "scale='min(1280,iw)':-2" if max(width, height) > 1280 else "null"
     fontsize = max(14, int(height * 0.08 * (size_pct / 100)))
-    x, y     = WM_POS_FFMPEG[pos]
+    x, y = WM_POS_FFMPEG[pos]
     safe_txt = _wm_escape(text)
-    vf       = (f"{scale_filter},"
-                f"drawtext=text='{safe_txt}':fontsize={fontsize}:fontcolor=white:x={x}:y={y}")
-    if outline: vf += ":borderw=3:bordercolor=black@0.85"
-    else:       vf += ":shadowx=2:shadowy=2:shadowcolor=black@0.6"
-   cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
-           "-i", input_path, "-vf", vf,
-           "-map", "0:v:0", "-map", "0:a?",
-           "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-           "-c:a", "aac", "-b:a", "128k",
-           "-movflags", "+faststart", "-y", output_path]
+    vf = (f"{scale_filter},"
+          f"drawtext=text='{safe_txt}':fontsize={fontsize}:fontcolor=white:x={x}:y={y}")
+    
+    if outline:
+        vf += ":borderw=3:bordercolor=black@0.85"
+    else:
+        vf += ":shadowx=2:shadowy=2:shadowcolor=black@0.6"
+        
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", input_path, "-vf", vf,
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-y", output_path
+    ]
+    
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     while True:
         if stop_evt is not None and stop_evt.is_set():
-            proc.kill(); raise Exception("USER_CANCELLED")
+            proc.kill()
+            raise Exception("USER_CANCELLED")
         rc = proc.poll()
         if rc is not None:
             err = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-            if rc != 0: raise Exception(f"ffmpeg: {err[-400:]}")
+            if rc != 0:
+                raise Exception(f"ffmpeg: {err[-400:]}")
             return
         time.sleep(1)
 
