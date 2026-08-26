@@ -4116,9 +4116,28 @@ async def process_watermark(client: Client, cb: CallbackQuery, sess: dict, proc_
         timer_task = asyncio.create_task(_wm_timer())
         await asyncio.to_thread(apply_watermark, input_path, output_path, sess["text"], sess["pos"], sess["outline"], sess["size"], stop_evt)
         await safe_edit(proc_msg, f"╭─「 💧 Marca de Agua 」\n┊\n┊ ✅ Procesado — subiendo...\n╰──────────────────────────\n\n{BOT_SIGNATURE}")
+        
+        # --- AQUÍ ARREGLAMOS LOS METADATOS Y LA MINIATURA ---
+        meta = get_video_meta(output_path)
+        thumb = extract_thumbnail(output_path)
         start_t = time.time()
         caption = source_caption if source_caption else BOT_SIGNATURE
-        await client.send_video(chat_id=chat_id, video=output_path, caption=caption, parse_mode=enums.ParseMode.HTML, supports_streaming=True, progress=upload_progress, progress_args=(proc_msg, start_t, uname, task_id))
+        
+        vid_kwargs = {
+            "chat_id": chat_id,
+            "video": output_path,
+            "caption": caption,
+            "parse_mode": enums.ParseMode.HTML,
+            "supports_streaming": True,
+            "progress": upload_progress,
+            "progress_args": (proc_msg, start_t, uname, task_id)
+        }
+        if thumb and os.path.exists(thumb): vid_kwargs["thumb"] = thumb
+        if meta.get("width", 0) > 0: vid_kwargs["width"] = meta.get("width")
+        if meta.get("height", 0) > 0: vid_kwargs["height"] = meta.get("height")
+        if meta.get("duration", 0) > 0: vid_kwargs["duration"] = meta.get("duration")
+
+        await client.send_video(**vid_kwargs)
         try: await proc_msg.delete()
         except Exception: pass
     except Exception as e:
