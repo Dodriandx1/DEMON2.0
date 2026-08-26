@@ -1137,6 +1137,7 @@ async def procesar_encode(client: Client, message: Message, target_msg: Message,
                 except: pass
 
 # ─── NÚCLEO DE DESCARGA ───────────────────────────────────────────────────────
+# ─── NÚCLEO DE DESCARGA ───────────────────────────────────────────────────────
 async def procesar_descarga(client: Client, message: Message, url: str,
                              uname: str, uid: int, queue_label: str,
                              want_subs: bool = False):
@@ -1150,6 +1151,13 @@ async def procesar_descarga(client: Client, message: Message, url: str,
         if mirror in url.lower():
             url = url.replace(mirror, main)
             break
+
+    # ─── PARCHE PARA MP4UPLOAD ───
+    if "mp4upload.com" in url.lower() and "embed" not in url.lower():
+        m = re.search(r'mp4upload\.com/([a-zA-Z0-9]+)', url)
+        if m:
+            url = f"https://www.mp4upload.com/embed-{m.group(1)}.html"
+    # ─────────────────────────────
 
     VIDEO_HOSTS = ["streamwish", "voe", "vidhide", "filemoon", "mixdrop",
                    "mp4upload", "streamtape", "flashwish", "callistanise",
