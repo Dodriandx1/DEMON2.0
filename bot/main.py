@@ -4000,6 +4000,14 @@ def _wm_kb_pos():
         [InlineKeyboardButton("❌ Cancelar",   callback_data="wm_cancel")],
     ])
 
+def _wm_kb_outline():
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Con Contorno", callback_data="wm_outline:yes"),
+         InlineKeyboardButton("🚫 Sin Contorno", callback_data="wm_outline:no")],
+        [InlineKeyboardButton("❌ Cancelar", callback_data="wm_cancel")],
+    ])
+
 def _wm_kb_size():
     from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup([
