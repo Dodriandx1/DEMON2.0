@@ -193,8 +193,11 @@ def keep_alive():
             pass
     port = int(os.environ.get("PORT", 8000))
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), Handler) as httpd:
-        httpd.serve_forever()
+    try:
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            httpd.serve_forever()
+    except OSError as e:
+        print(f"[keep_alive] Aviso: El puerto {port} está ocupado por un reinicio rápido. El bot seguirá funcionando normal.")
 
 _keep_alive_enabled = os.environ.get("KEEP_ALIVE", "true").strip().lower() in {
     "1", "true", "yes", "on"
