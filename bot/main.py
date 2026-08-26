@@ -4131,9 +4131,63 @@ async def handle_video_upload(client: Client, message: Message):
         return
 
     if mime.startswith("video/") or fname.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm")):
-        asyncio.create_task(procesar_encode(client, message, message, uname, uid, original_name=fname or "video"))
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Auto-Encode", callback_data="vid_opt:encode")],
+            [InlineKeyboardButton("💧 Marca de Agua", callback_data="vid_opt:watermark")]
+        ])
+        await message.reply_text(
+            f"╭─「 🎬 Archivo de Video Detectado 」\n"
+            f"┊ 📄 {fname or 'video'}\n"
+            f"╰─ ¿Qué deseas hacer con este archivo?\n\n{BOT_SIGNATURE}",
+            reply_markup=kb,
+            quote=True
+        )
         return
 
+@bot.on_callback_query(filters.regex(r"^vid_opt:(encode|watermark)$"))
+async def cb_video_options(client: Client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    if not is_auth(uid):
+        await cb.answer("⛔ No autorizado.", show_alert=True)
+        return
+
+    opt = cb.matches[0].group(1)
+    uname = cb.from_user.username or cb.from_user.first_name or str(uid)
+
+    msg = cb.message.reply_to_message
+    if not msg:
+        await cb.answer("❌ El mensaje original ya no está disponible.", show_alert=True)
+        return
+
+    if opt == "encode":
+        await cb.message.delete()
+        fname = ""
+        if msg.document: fname = msg.document.file_name or "video"
+        elif msg.video: fname = msg.video.file_name or "video"
+        asyncio.create_task(procesar_encode(client, msg, msg, uname, uid, original_name=fname))
+
+    elif opt == "watermark":
+        file_id = None
+        if msg.video: file_id = msg.video.file_id
+        elif msg.document: file_id = msg.document.file_id
+
+        if not file_id:
+            await cb.answer("❌ No se detectó un archivo válido.", show_alert=True)
+            return
+
+        # Inicializa la sesión de marca de agua esperando que el usuario escriba el texto
+        _wm_sessions[str(uid)] = {
+            "step": "awaiting_text",
+            "file_id": file_id,
+            "chat_id": msg.chat.id,
+            "caption": msg.caption or ""
+        }
+        await cb.message.edit_text(
+            f"╭─「 💧 Marca de Agua 」\n┊\n"
+            f"╰─ Escribe y envía ahora el **TEXTO** que deseas usar como marca de agua en el chat:\n\n{BOT_SIGNATURE}"
+        )
+        
 _EXCLUDE_CMDS = ["start", "stat", "Stat", "STAT", "reset", "Reset", "RESET",
                  "id", "Removeid", "removeid", "cancelarID", "cancelarid",
                  "addid", "Addid", "rmid", "removebyid", "setplan", "plan",
