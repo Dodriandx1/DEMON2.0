@@ -199,9 +199,9 @@ def keep_alive():
     except OSError as e:
         print(f"[keep_alive] Aviso: El puerto {port} está ocupado por un reinicio rápido. El bot seguirá funcionando normal.")
 
-_keep_alive_enabled = os.environ.get("KEEP_ALIVE", "true").strip().lower() in {
-    "1", "true", "yes", "on"
-}
+# Apagamos el keep_alive forzosamente para evitar choque de puertos
+_keep_alive_enabled = False
+
 if _keep_alive_enabled:
     threading.Thread(target=keep_alive, daemon=True).start()
 
