@@ -263,25 +263,28 @@ def extract_thumbnail(video_path: str):
 def get_video_meta(video_path: str) -> dict:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error",
-             "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-show_entries", "format=duration",
-             "-of", "csv=p=0", video_path],
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration:stream=width,height", "-of", "json", video_path],
             capture_output=True, text=True, timeout=10
         )
-        lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+        data = json.loads(result.stdout)
+        
         width, height, duration = 0, 0, 0
-        for line in lines:
-            parts = line.split(",")
-            if len(parts) == 2:
-                try: width, height = int(parts[0]), int(parts[1])
-                except ValueError: pass
-            elif len(parts) == 1:
-                try: duration = int(float(parts[0]))
-                except ValueError: pass
+        
+        # Extraer duración
+        if "format" in data and "duration" in data["format"]:
+            duration = int(float(data["format"]["duration"]))
+            
+        # Extraer resolución
+        for stream in data.get("streams", []):
+            if "width" in stream and "height" in stream:
+                width = stream["width"]
+                height = stream["height"]
+                break
+                
         return {"width": width, "height": height, "duration": duration}
-    except Exception:
+    except Exception as e:
+        print(f"[Meta Error]: {e}")
         return {"width": 0, "height": 0, "duration": 0}
 
 # ─── MENÚ INTERACTIVO DE PISTAS ──────────────────────────────────────────
