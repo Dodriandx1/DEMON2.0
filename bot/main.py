@@ -4224,6 +4224,8 @@ async def handle_text_input(client: Client, message: Message):
 
     uid_str = str(uid)
     sess = _wm_sessions.get(uid_str)
+    
+    # 1. Si está en medio de poner una marca de agua, captura el texto
     if sess and sess.get("step") == "awaiting_text":
         txt = raw_text
         if not txt: return
@@ -4235,20 +4237,27 @@ async def handle_text_input(client: Client, message: Message):
             parse_mode=enums.ParseMode.HTML, reply_markup=_wm_kb_pos())
         return
 
-    if not is_auth(uid):
-        await message.reply_text(
-            f"⛔ **Acceso denegado.**\n"
-            f"No estás autorizado. Tu ID es `{uid}`.\n"
-            f"Pídele al admin que ejecute: `/addid {uid}`")
-        return
-
     if _wm_sessions.get(uid_str) and re.search(r"https?://", raw_text):
         _wm_sessions.pop(uid_str, None)
         await message.reply_text(f"⚠️ Sesión de marca de agua cancelada automáticamente.\nProcesando tu enlace...\n\n{BOT_SIGNATURE}")
 
-    want_subs = bool(re.search(r"(?:^|\s)-lat(?:\s|$)", raw_text, re.IGNORECASE))
+    # 2. Buscar si hay enlaces en el mensaje ANTES de verificar autorización
     urls = re.findall(r"https?://[^\s]+", raw_text)
-    if not urls: return
+    
+    # SI NO HAY ENLACES, IGNORAMOS EL MENSAJE EN SILENCIO
+    if not urls: 
+        return
+
+    # 3. SI HAY ENLACES, RECIÉN AQUÍ VERIFICAMOS LA AUTORIZACIÓN
+    if not is_auth(uid):
+        await message.reply_text(
+            f"⛔ **Acceso denegado.**\n"
+            f"No estás autorizado para descargar enlaces. Tu ID es `{uid}`.\n"
+            f"Pídele al admin que ejecute: `/addid {uid}`")
+        return
+
+    # 4. Si está autorizado, procede con la descarga
+    want_subs = bool(re.search(r"(?:^|\s)-lat(?:\s|$)", raw_text, re.IGNORECASE))
 
     uname = message.from_user.first_name
     user_plan = get_user_plan(uid)
