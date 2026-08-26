@@ -182,29 +182,6 @@ def get_required_plan_for_url(url: str) -> int:
     # PLAN 5: Redes sociales (YouTube, IG, TikTok, Spotify, Twitter, FB, etc.)
     return 5
 
-# ─── KEEP-ALIVE / WORKER ──────────────────────────────────────────────────────
-def keep_alive():
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Bot is Running")
-        def log_message(self, *args):
-            pass
-    port = int(os.environ.get("PORT", 8000))
-    socketserver.TCPServer.allow_reuse_address = True
-    try:
-        with socketserver.TCPServer(("", port), Handler) as httpd:
-            httpd.serve_forever()
-    except OSError as e:
-        print(f"[keep_alive] Aviso: El puerto {port} está ocupado por un reinicio rápido. El bot seguirá funcionando normal.")
-
-# Apagamos el keep_alive forzosamente para evitar choque de puertos
-_keep_alive_enabled = False
-
-if _keep_alive_enabled:
-    threading.Thread(target=keep_alive, daemon=True).start()
-
 # ─── UTILIDADES ───────────────────────────────────────────────────────────────
 def get_readable_size(size) -> str:
     if size is None or size == 0: return "0B"
