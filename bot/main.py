@@ -638,6 +638,7 @@ async def _ensure_jpeg(path: str) -> str:
     return path
 
 # ─── SUBIDA INTELIGENTE ───────────────────────────────────────────────────────
+# ─── SUBIDA INTELIGENTE ───────────────────────────────────────────────────────
 async def upload_smart_file(client: Client, message: Message, path: str,
                              msg: Message, uname: str, task_id: str, title: str = ""):
     try:
@@ -656,27 +657,23 @@ async def upload_smart_file(client: Client, message: Message, path: str,
         thumb = extract_thumbnail(path)
         meta  = get_video_meta(path)
         
-        w = meta.get("width")
-        h = meta.get("height")
-        if not w or w == 0:  
-            w = 1280
-        if not h or h == 0:  
-            h = 720
-        
+        # Construimos las propiedades para no forzar los 0 segundos si algo falla
+        vid_kwargs = {
+            "chat_id": message.chat.id,
+            "video": path,
+            "caption": caption,
+            "parse_mode": enums.ParseMode.HTML,
+            "supports_streaming": True,
+            "progress": upload_progress,
+            "progress_args": (msg, start_t, uname, task_id)
+        }
+        if thumb and os.path.exists(thumb): vid_kwargs["thumb"] = thumb
+        if meta.get("width", 0) > 0: vid_kwargs["width"] = meta.get("width")
+        if meta.get("height", 0) > 0: vid_kwargs["height"] = meta.get("height")
+        if meta.get("duration", 0) > 0: vid_kwargs["duration"] = meta.get("duration")
+
         try:
-            await client.send_video(
-                chat_id=message.chat.id, 
-                video=path, 
-                thumb=thumb,
-                supports_streaming=True,
-                width=w, 
-                height=h,
-                duration=meta.get("duration") or 0,
-                caption=caption, 
-                parse_mode=enums.ParseMode.HTML,
-                progress=upload_progress, 
-                progress_args=(msg, start_t, uname, task_id)
-            )
+            await client.send_video(**vid_kwargs)
         except asyncio.CancelledError:
             raise
         except Exception as e:
