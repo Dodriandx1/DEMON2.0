@@ -3951,11 +3951,11 @@ def apply_watermark(input_path: str, output_path: str, text: str, pos: str,
                 f"drawtext=text='{safe_txt}':fontsize={fontsize}:fontcolor=white:x={x}:y={y}")
     if outline: vf += ":borderw=3:bordercolor=black@0.85"
     else:       vf += ":shadowx=2:shadowy=2:shadowcolor=black@0.6"
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+   cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
            "-i", input_path, "-vf", vf,
            "-map", "0:v:0", "-map", "0:a?",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
-           "-c:a", "aac", "-b:a", "96k",
+           "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+           "-c:a", "aac", "-b:a", "128k",
            "-movflags", "+faststart", "-y", output_path]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     while True:
