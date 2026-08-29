@@ -4218,7 +4218,8 @@ async def handle_video_upload(client: Client, message: Message):
         from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚙️ Auto-Encode", callback_data="vid_opt:encode")],
-            [InlineKeyboardButton("💧 Marca de Agua", callback_data="vid_opt:watermark")]
+            [InlineKeyboardButton("💧 Marca de Agua", callback_data="vid_opt:watermark")],
+            [InlineKeyboardButton("❌ Cerrar Panel", callback_data="close_panel")]
         ])
         await message.reply_text(
             f"╭─「 🎬 Archivo de Video Detectado 」\n"
@@ -4228,7 +4229,7 @@ async def handle_video_upload(client: Client, message: Message):
             quote=True
         )
         return
-
+        
 @bot.on_callback_query(filters.regex(r"^vid_opt:(encode|watermark)$"))
 async def cb_video_options(client: Client, cb: CallbackQuery):
     uid = cb.from_user.id
