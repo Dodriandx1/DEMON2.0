@@ -350,6 +350,7 @@ def get_encode_keyboard(task_id):
         if s_row: rows.append(s_row)
         
     rows.append([InlineKeyboardButton("▶️ COMENZAR CONVERSIÓN", callback_data=f"enc_start:{task_id}")])
+    rows.append([InlineKeyboardButton("❌ Cancelar", callback_data=f"enc_cancel:{task_id}")]) # Botón Cerrar/Cancelar
     return InlineKeyboardMarkup(rows)
 
 def get_encode_text(task_id, file_name):
