@@ -2854,6 +2854,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                                    uname: str, task_id: str, dl_dir: str,
                                    select_indices=None):
     import shutil
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     encoded_path = None; input_path = None
     try:
         video_files = []
@@ -2884,11 +2885,21 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                 "audios": tracks["audios"], "subs": tracks["subs"],
                 "sel_a": tracks["audios"][0]["idx"] if tracks["audios"] else None,
                 "sel_s": None,
-                "event": menu_event
+                "event": menu_event,
+                "file_name": input_name[:40],
+                "mode": None
             }
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Auto-Encode (Español)", callback_data=f"enc_mode:{task_id}:auto")],
+                [InlineKeyboardButton("🛠 Selección Manual", callback_data=f"enc_mode:{task_id}:manual")],
+                [InlineKeyboardButton("❌ Cancelar", callback_data=f"enc_cancel:{task_id}")]
+            ])
+
             menu_msg = await message.reply_text(
-                get_encode_text(task_id, input_name[:40]),
-                reply_markup=get_encode_keyboard(task_id)
+                f"╭ Task By → 「{uname}」\n┊ 🎬 Archivo: <b>{input_name[:40]}</b>\n"
+                f"╰ Selecciona el método de procesamiento:\n\n{BOT_SIGNATURE}",
+                reply_markup=kb, parse_mode=enums.ParseMode.HTML
             )
             
             while not menu_event.is_set():
@@ -2896,8 +2907,27 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
                     raise asyncio.CancelledError("USER_CANCELLED")
                 await asyncio.sleep(1)
             
-            sel_a = _encode_menus[task_id]["sel_a"]
-            sel_s = _encode_menus[task_id]["sel_s"]
+            try: await menu_msg.delete()
+            except: pass
+
+            sel_mode = _encode_menus.get(task_id, {}).get("mode")
+            if sel_mode == "auto":
+                spa_keywords = ["spa", "es", "spanish", "español", "latino", "castellano"]
+                sel_a = tracks["audios"][0]["idx"] if tracks["audios"] else None
+                sel_s = None
+                
+                if tracks["audios"]:
+                    for a in tracks["audios"]:
+                        if any(k in a["label"].lower() for k in spa_keywords):
+                            sel_a = a["idx"]; break
+                if tracks["subs"]:
+                    for s in tracks["subs"]:
+                        if any(k in s["label"].lower() for k in spa_keywords):
+                            sel_s = s["idx"]; break
+            else:
+                sel_a = _encode_menus.get(task_id, {}).get("sel_a")
+                sel_s = _encode_menus.get(task_id, {}).get("sel_s")
+                
             _encode_menus.pop(task_id, None)
             
             if sel_a:
@@ -2917,7 +2947,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
 
         if sub_path:
             await safe_edit(msg,
-                f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos ES y comprimiendo a 720p...\n"
+                f"╭ Task By → 「{uname}」\n┊ 🔤 Quemando subtítulos y comprimiendo...\n"
                 f"┊ 🎬 {input_name[:40]}\n╰ Mode      : #TorrentMode\n\n{BOT_SIGNATURE}")
             abs_sub  = os.path.abspath(sub_path).replace('\\', '/').replace(':', '\\:')
             sub_proc = await asyncio.create_subprocess_exec(
@@ -2969,7 +2999,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         if os.path.exists(temp_sub):
             try: os.remove(temp_sub)
             except Exception: pass
-
+                
 async def _run_torrent_download(client, message, msg, uname, task_id, source, dl_dir, select_indices=None):
     cmd = ["aria2c", "--dir", dl_dir, "--seed-time=0",
            "--max-connection-per-server=16", "--split=16",
