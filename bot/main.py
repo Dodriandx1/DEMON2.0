@@ -2999,7 +2999,7 @@ async def _torrent_encode_and_send(client: Client, message: Message, msg,
         if os.path.exists(temp_sub):
             try: os.remove(temp_sub)
             except Exception: pass
-                
+
 async def _run_torrent_download(client, message, msg, uname, task_id, source, dl_dir, select_indices=None):
     cmd = ["aria2c", "--dir", dl_dir, "--seed-time=0",
            "--max-connection-per-server=16", "--split=16",
@@ -4372,7 +4372,86 @@ async def handle_text_input(client: Client, message: Message):
             await message.reply_text(f"📥 Enlace añadido a la cola.{subs_note}\n🚦 Tareas en espera: {q}\n\n{BOT_SIGNATURE}")
         elif queued > 0:
             await message.reply_text(f"📥 {queued} enlace(s) añadido(s) a la cola.{subs_note}\n🚦 Total en espera: {q}\n\n{BOT_SIGNATURE}")
+# ─── HANDLERS DE INTERFAZ Y TORRENTS (NUEVOS) ─────────────────────────────
 
+@bot.on_callback_query(filters.regex(r"^close_panel$"))
+async def cb_close_panel(client: Client, cb: CallbackQuery):
+    try: await cb.message.delete()
+    except Exception: pass
+    await cb.answer()
+
+@bot.on_callback_query(filters.regex(r"^enc_(mode|a|s|start|cancel):([^:]+)(?::(.+))?$"))
+async def cb_encode_menu(client: Client, cb: CallbackQuery):
+    action = cb.matches[0].group(1)
+    task_id = cb.matches[0].group(2)
+    val = cb.matches[0].group(3)
+
+    sess = _encode_menus.get(task_id)
+    if not sess:
+        await cb.answer("❌ Sesión expirada o tarea terminada.", show_alert=True)
+        return
+
+    if action == "cancel":
+        active_tasks[task_id] = "CANCELLED"
+        sess["event"].set()
+        try: await cb.message.delete()
+        except: pass
+        return
+
+    if action == "mode":
+        sess["mode"] = val
+        if val == "auto":
+            sess["event"].set()
+        else:
+            await cb.message.edit_text(
+                get_encode_text(task_id, sess.get("file_name", "Video")),
+                reply_markup=get_encode_keyboard(task_id)
+            )
+    elif action == "a":
+        sess["sel_a"] = val
+        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
+    elif action == "s":
+        sess["sel_s"] = None if val == "none" else val
+        await cb.message.edit_reply_markup(get_encode_keyboard(task_id))
+    elif action == "start":
+        sess["event"].set()
+
+    await cb.answer()
+
+@bot.on_callback_query(filters.regex(r"^tr_(sel|all|cxl):(\d+):([^:]+)(?::(\d+))?$"))
+async def cb_torrent_selection(client: Client, cb: CallbackQuery):
+    action = cb.matches[0].group(1)
+    uid = cb.matches[0].group(2)
+    task_id = cb.matches[0].group(3)
+    file_idx_str = cb.matches[0].group(4)
+
+    if str(cb.from_user.id) != uid:
+        await cb.answer("⛔ No es tu tarea.", show_alert=True)
+        return
+
+    sess = _torrent_sessions.get(uid)
+    if not sess or sess["task_id"] != task_id:
+        await cb.answer("❌ Sesión expirada.", show_alert=True)
+        return
+
+    if action == "cxl":
+        active_tasks[task_id] = "CANCELLED"
+        _torrent_sessions.pop(uid, None)
+        await cb.message.edit_text(f"❌ Descarga de torrent cancelada.\n\n{BOT_SIGNATURE}")
+        return
+
+    await cb.message.edit_text(f"⏳ Iniciando descarga de la selección...\n\n{BOT_SIGNATURE}")
+    
+    select_indices = [int(file_idx_str)] if action == "sel" else None
+    _torrent_sessions.pop(uid, None)
+    
+    async def _run():
+        try:
+            await _run_torrent_download(client, cb.message, cb.message, sess["uname"], task_id, sess["source"], sess["dl_dir"], select_indices)
+            await _torrent_encode_and_send(client, cb.message, cb.message, sess["uname"], task_id, sess["dl_dir"])
+        except Exception: pass
+    asyncio.create_task(_run())
+    
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
 async def main():
     async with bot:
