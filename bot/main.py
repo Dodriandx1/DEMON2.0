@@ -3268,6 +3268,7 @@ async def cmd_playv(client: Client, message: Message):
     queue_label = f"Cola #{download_queue.qsize() + 1}"
     await download_queue.put((client, message, hits[0]["url"], uname, uid, queue_label, False))
 
+
 @bot.on_message(filters.command(["search", "buscar", "musica", "música", "sm"]))
 async def cmd_search(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
@@ -3285,7 +3286,7 @@ async def cmd_search(client: Client, message: Message):
     msg   = await message.reply_text(
         f"╭ Task By → 「{uname}」\n"
         f"┊ 🔍 Buscando: <b>{query[:50]}</b>...\n"
-        f"╰ Mode     : #MusicSearch\n\n{BOT_SIGNATURE}",
+        f"╰ Mode      : #MusicSearch\n\n{BOT_SIGNATURE}",
         parse_mode=enums.ParseMode.HTML
     )
     hits = await _yt_search(query, n=5)
@@ -3304,6 +3305,8 @@ async def cmd_search(client: Client, message: Message):
             InlineKeyboardButton(f"🎵 {num}", callback_data=f"mplay:{search_key}:{i}:a"),
             InlineKeyboardButton(f"🎬 {num}", callback_data=f"mplay:{search_key}:{i}:v"),
         ])
+        
+    rows.append([InlineKeyboardButton("❌ Cerrar Panel", callback_data="close_panel")])
 
     lines = [f"╭─ 🔍 Resultados para: <b>{query[:50]}</b>\n┊"]
     for i, h in enumerate(hits, 1):
@@ -3319,7 +3322,7 @@ async def cmd_search(client: Client, message: Message):
         parse_mode=enums.ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(rows)
     )
-
+    
 @bot.on_message(filters.command(["pdf", "doc", "gdrive"]))
 async def cmd_pdf(client: Client, message: Message):
     if not is_auth(message.from_user.id): return
