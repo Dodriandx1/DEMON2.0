@@ -2847,6 +2847,7 @@ def _torrent_selection_kb(files: list, uid: int, task_id: str):
         InlineKeyboardButton("📦 Todos",    callback_data=f"tr_all:{uid}:{task_id}"),
         InlineKeyboardButton("❌ Cancelar", callback_data=f"tr_cxl:{uid}:{task_id}"),
     ])
+    rows.append([InlineKeyboardButton("❌ Cerrar Panel", callback_data="close_panel")])
     return InlineKeyboardMarkup(rows)
 
 async def _torrent_encode_and_send(client: Client, message: Message, msg,
