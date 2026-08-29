@@ -3529,6 +3529,7 @@ async def cmd_quality(client: Client, message: Message):
         [InlineKeyboardButton("🟡 720p",              callback_data="quality:720"),
          InlineKeyboardButton("🟠 480p",              callback_data="quality:480")],
         [InlineKeyboardButton("⚪ Mejor disponible", callback_data="quality:0")],
+        [InlineKeyboardButton("❌ Cerrar Panel", callback_data="close_panel")]
     ])
     await message.reply_text(
         f"╭─ Calidad de descarga\n"
@@ -3537,7 +3538,7 @@ async def cmd_quality(client: Client, message: Message):
         f"╰─ Elige la calidad máxima:\n\n{BOT_SIGNATURE}",
         parse_mode=enums.ParseMode.HTML, reply_markup=kb
     )
-
+    
 @bot.on_callback_query(filters.regex(r"^quality:(\d+)$"))
 async def cb_quality(client: Client, cb: CallbackQuery):
     global _max_quality
